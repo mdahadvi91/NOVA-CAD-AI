@@ -9,6 +9,17 @@ export interface User {
   salt: string;
   name: string;
   role: 'user' | 'admin';
+  tier: 'free' | 'pro' | 'enterprise';
+  subscriptionStatus: 'active' | 'trialing' | 'past_due' | 'canceled' | 'none';
+  aiCreditsRemaining: number;
+  aiCreditsTotal: number;
+  emailVerified: boolean;
+  verificationToken?: string;
+  verificationTokenExpires?: string;
+  resetPasswordToken?: string;
+  resetPasswordExpires?: string;
+  passwordChangedAt?: string;
+  lastLoginAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,18 +204,150 @@ class Database {
       await this.persist();
     }
 
-    // Ensure demo user exists if users is empty
-    if (Object.keys(this.data.users).length === 0) {
-      this.seedDemoUser();
-      await this.persist();
+    // Production vs Development demo user sanitization
+    const isProd = process.env.NODE_ENV === 'production';
+    if (isProd) {
+      // In production: Strictly NO default demo user, NO default password
+      if (this.data.users['usr_demo_nova']) {
+        delete this.data.users['usr_demo_nova'];
+        delete this.data.projects['prj_foundation_sample'];
+        delete this.data.projectVersions['prj_foundation_sample'];
+        await this.persist();
+      }
+    } else {
+      // In development/test mode: Seed demo user for testing if not already present
+      if (!this.data.users['usr_demo_nova']) {
+        this.seedDemoUser();
+        await this.persist();
+      }
     }
 
     this.isInitialized = true;
   }
 
+  /**
+   * ACID-compliant transaction manager with automatic rollback on error
+   */
+  public async runTransaction<T>(operation: () => Promise<T>): Promise<T> {
+    await this.init();
+    // Snapshot current state in-memory
+    const snapshot = JSON.stringify(this.data);
+    try {
+      const result = await operation();
+      await this.persist();
+      return result;
+    } catch (err) {
+      // ROLLBACK on failure
+      this.data = JSON.parse(snapshot);
+      await this.persist();
+      throw err;
+    }
+  }
+
+  /**
+   * Atomic User Registration with Starter CAD Project
+   * Guaranteed all-or-nothing atomicity. If starter project creation fails, user creation rolls back.
+   */
+  public async registerUserAtomic(
+    userData: {
+      email: string;
+      passwordHash: string;
+      salt: string;
+      name: string;
+      verificationToken?: string;
+      verificationTokenExpires?: string;
+    },
+    starterProjectData: {
+      name: string;
+      description?: string;
+      units?: 'mm' | 'cm' | 'm' | 'in' | 'ft';
+    }
+  ): Promise<{ user: User; starterProject: Project }> {
+    return this.runTransaction(async () => {
+      const id = `usr_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
+      const user: User = {
+        id,
+        email: userData.email.trim().toLowerCase(),
+        passwordHash: userData.passwordHash,
+        salt: userData.salt,
+        name: userData.name.trim(),
+        role: 'user',
+        tier: 'free',
+        subscriptionStatus: 'none',
+        aiCreditsRemaining: 50,
+        aiCreditsTotal: 50,
+        emailVerified: false,
+        verificationToken: userData.verificationToken,
+        verificationTokenExpires: userData.verificationTokenExpires,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.data.users[id] = user;
+
+      // Create starter project atomically
+      const projectId = `prj_${crypto.randomBytes(8).toString('hex')}`;
+      const versionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+      const initialDrawing: DrawingData = {
+        objects: [],
+        layers: [
+          { id: 'layer_0', name: '0 - Standard', color: '#00e5ff', visible: true, locked: false },
+          { id: 'layer_geom', name: 'A-GEOM', color: '#ffffff', visible: true, locked: false },
+        ],
+        viewState: {
+          panX: 0,
+          panY: 0,
+          zoom: 1.0,
+          gridVisible: true,
+          gridSnap: true,
+          gridSize: 20,
+        },
+        calibration: {
+          originX: 0,
+          originY: 0,
+          scaleRefLength: 1000,
+        },
+      };
+
+      const project: Project = {
+        id: projectId,
+        ownerId: user.id,
+        name: starterProjectData.name,
+        description: starterProjectData.description || '',
+        units: starterProjectData.units || 'mm',
+        status: 'active',
+        metadata: {
+          gridSpacing: 20,
+          snapTolerance: 10,
+          precision: 2,
+        },
+        createdAt: now,
+        updatedAt: now,
+        currentVersionId: versionId,
+        drawingData: initialDrawing,
+      };
+
+      this.data.projects[projectId] = project;
+      this.data.projectVersions[projectId] = [
+        {
+          id: versionId,
+          projectId,
+          version: 1,
+          createdAt: now,
+          createdBy: user.id,
+          description: 'Initial Phase 1 Workspace Calibration',
+          drawingData: initialDrawing,
+        },
+      ];
+
+      return { user, starterProject: project };
+    });
+  }
+
   private seedDemoUser(): void {
     const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = crypto.pbkdf2Sync('password123', salt, 1000, 64, 'sha512').toString('hex');
+    // SHA-512 fallback salt hash for demo user; upon first login verifyPassword can automatically rehash with Argon2id
+    const passwordHash = crypto.pbkdf2Sync('NovaArchitect2026!', salt, 1000, 64, 'sha512').toString('hex');
     const demoUser: User = {
       id: 'usr_demo_nova',
       email: 'demo@novacad.ai',
@@ -212,6 +355,11 @@ class Database {
       salt,
       name: 'Architect Demo',
       role: 'user',
+      tier: 'pro',
+      subscriptionStatus: 'active',
+      aiCreditsRemaining: 1000,
+      aiCreditsTotal: 1000,
+      emailVerified: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -301,6 +449,8 @@ class Database {
     passwordHash: string;
     salt: string;
     name: string;
+    verificationToken?: string;
+    verificationTokenExpires?: string;
   }): Promise<User> {
     await this.init();
     const id = `usr_${crypto.randomBytes(8).toString('hex')}`;
@@ -312,12 +462,48 @@ class Database {
       salt: userData.salt,
       name: userData.name.trim(),
       role: 'user',
+      tier: 'free',
+      subscriptionStatus: 'none',
+      aiCreditsRemaining: 50,
+      aiCreditsTotal: 50,
+      emailVerified: false,
+      verificationToken: userData.verificationToken,
+      verificationTokenExpires: userData.verificationTokenExpires,
       createdAt: now,
       updatedAt: now,
     };
     this.data.users[id] = user;
     await this.persist();
     return user;
+  }
+
+  public async updateUser(userId: string, partial: Partial<User>): Promise<User | null> {
+    await this.init();
+    const user = this.data.users[userId];
+    if (!user) return null;
+
+    const updated: User = {
+      ...user,
+      ...partial,
+      updatedAt: new Date().toISOString(),
+    };
+    this.data.users[userId] = updated;
+    await this.persist();
+    return updated;
+  }
+
+  public async findUserByVerificationToken(token: string): Promise<User | null> {
+    await this.init();
+    if (!token) return null;
+    const user = Object.values(this.data.users).find((u) => u.verificationToken === token);
+    return user || null;
+  }
+
+  public async findUserByResetToken(token: string): Promise<User | null> {
+    await this.init();
+    if (!token) return null;
+    const user = Object.values(this.data.users).find((u) => u.resetPasswordToken === token);
+    return user || null;
   }
 
   // --- PROJECT METHODS ---

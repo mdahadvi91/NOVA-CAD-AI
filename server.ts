@@ -1,17 +1,23 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { validateAndGetConfig } from './server/config.js';
 import authRoutes from './server/routes/auth.js';
 import projectRoutes from './server/routes/projects.js';
 import { db } from './server/db.js';
 
 async function startServer() {
+  // Validate environment and fail fast in production if APP_SECRET is missing or insecure
+  validateAndGetConfig();
+
   await db.init();
 
   const app = express();
   const PORT = 3000;
 
   app.use(express.json({ limit: '15mb' }));
+  app.use(cookieParser());
 
   // API health check
   app.get('/api/health', (_req, res) => {

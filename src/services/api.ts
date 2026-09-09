@@ -1,4 +1,4 @@
-import { AuthResponse, Project, ProjectVersion, UnitType, DrawingData, ProjectMetadata } from '../types';
+import { AuthResponse, Project, ProjectVersion, UnitType, DrawingData, ProjectMetadata, SubscriptionStatusResponse } from '../types';
 
 const TOKEN_KEY = 'nova_cad_token';
 
@@ -39,6 +39,7 @@ class ApiService {
     try {
       const response = await fetch(endpoint, {
         ...options,
+        credentials: 'same-origin',
         headers,
       });
 
@@ -63,10 +64,15 @@ class ApiService {
   }
 
   // --- AUTH METHODS ---
-  public async register(email: string, name: string, password: string): Promise<AuthResponse> {
+  public async register(
+    email: string,
+    name: string,
+    password: string,
+    confirmPassword?: string
+  ): Promise<AuthResponse> {
     const res = await this.request<AuthResponse>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, name, password }),
+      body: JSON.stringify({ email, name, password, confirmPassword: confirmPassword || password }),
     });
     this.setToken(res.token);
     return res;
@@ -81,12 +87,55 @@ class ApiService {
     return res;
   }
 
+  public async logout(): Promise<void> {
+    try {
+      await this.request('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore network errors on logout
+    }
+    this.setToken(null);
+  }
+
   public async getMe(): Promise<{ user: AuthResponse['user'] }> {
     return this.request<{ user: AuthResponse['user'] }>('/api/auth/me');
   }
 
-  public logout(): void {
-    this.setToken(null);
+  public async verifyEmail(token: string): Promise<{ message: string; user?: AuthResponse['user'] }> {
+    return this.request<{ message: string; user?: AuthResponse['user'] }>('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  public async resendVerification(email?: string): Promise<{ message: string; devVerificationToken?: string }> {
+    return this.request<{ message: string; devVerificationToken?: string }>('/api/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  public async quickVerify(): Promise<{ message: string; user: AuthResponse['user'] }> {
+    return this.request<{ message: string; user: AuthResponse['user'] }>('/api/auth/quick-verify', {
+      method: 'POST',
+    });
+  }
+
+  public async forgotPassword(email: string): Promise<{ message: string; devResetToken?: string }> {
+    return this.request<{ message: string; devResetToken?: string }>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  public async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, newPassword }),
+    });
+  }
+
+  public async getSubscriptionStatus(): Promise<SubscriptionStatusResponse> {
+    return this.request<SubscriptionStatusResponse>('/api/auth/subscription-status');
   }
 
   // --- PROJECT METHODS ---

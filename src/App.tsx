@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { EmailVerificationBanner } from './components/common/EmailVerificationBanner';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -79,10 +80,15 @@ function AppRouter() {
       return null;
     }
     return (
-      <DashboardPage
-        onOpenProject={(id) => navigate(`/project/${id}`)}
-        onNavigateHome={() => navigate('/')}
-      />
+      <div className="min-h-screen flex flex-col">
+        <EmailVerificationBanner />
+        <div className="flex-1">
+          <DashboardPage
+            onOpenProject={(id) => navigate(`/project/${id}`)}
+            onNavigateHome={() => navigate('/')}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -98,11 +104,16 @@ function AppRouter() {
       return null;
     }
     return (
-      <WorkspacePage
-        projectId={projectId}
-        onBackToDashboard={() => navigate('/dashboard')}
-        onNavigateHome={() => navigate('/')}
-      />
+      <div className="min-h-screen flex flex-col">
+        <EmailVerificationBanner />
+        <div className="flex-1">
+          <WorkspacePage
+            projectId={projectId}
+            onBackToDashboard={() => navigate('/dashboard')}
+            onNavigateHome={() => navigate('/')}
+          />
+        </div>
+      </div>
     );
   }
 

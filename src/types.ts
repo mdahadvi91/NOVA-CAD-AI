@@ -5,12 +5,32 @@ export interface User {
   email: string;
   name: string;
   role: 'user' | 'admin';
+  tier?: 'free' | 'pro' | 'enterprise';
+  subscriptionStatus?: 'active' | 'trialing' | 'past_due' | 'canceled' | 'none';
+  aiCreditsRemaining?: number;
+  aiCreditsTotal?: number;
+  emailVerified?: boolean;
   createdAt: string;
 }
 
 export interface AuthResponse {
   token: string;
   user: User;
+  devVerificationToken?: string;
+}
+
+export interface SubscriptionStatusResponse {
+  tier: 'free' | 'pro' | 'enterprise';
+  status: string;
+  aiCreditsRemaining: number;
+  aiCreditsTotal: number;
+  serverAuthorized: boolean;
+  capabilities: {
+    proCadTools: boolean;
+    highPrecisionDxfExport: boolean;
+    aiFloorplanGeneration: boolean;
+    cloudTeamCollaboration: boolean;
+  };
 }
 
 export interface ViewState {

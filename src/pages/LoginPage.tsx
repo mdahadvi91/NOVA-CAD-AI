@@ -1,6 +1,17 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Compass, Lock, Mail, ArrowRight, AlertCircle, KeyRound } from 'lucide-react';
+import { ForgotPasswordModal } from '../components/common/ForgotPasswordModal';
+import {
+  Compass,
+  Lock,
+  Mail,
+  ArrowRight,
+  AlertCircle,
+  KeyRound,
+  Eye,
+  EyeOff,
+  ShieldAlert,
+} from 'lucide-react';
 
 interface LoginPageProps {
   onNavigateRegister: () => void;
@@ -14,12 +25,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const { login, error, clearError, isLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
+  const [resetSuccessNotice, setResetSuccessNotice] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     clearError();
     setLocalError(null);
+    setResetSuccessNotice(null);
 
     if (!email.trim() || !password) {
       setLocalError('Please enter both your email address and password.');
@@ -29,18 +44,20 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     try {
       await login(email.trim(), password);
     } catch {
-      // Error handled by AuthContext
+      // Handled by AuthContext and displayed below
     }
   };
 
   const handleFillDemo = () => {
     setEmail('demo@novacad.ai');
-    setPassword('password123');
+    setPassword('NovaArchitect2026!');
     clearError();
     setLocalError(null);
+    setResetSuccessNotice(null);
   };
 
   const displayError = localError || error;
+  const isLockoutError = displayError?.toLowerCase().includes('lockout') || displayError?.toLowerCase().includes('locked');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between font-sans selection:bg-cyan-500 selection:text-slate-950">
@@ -60,7 +77,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       {/* Main Login Card */}
       <div className="max-w-md w-full mx-auto px-4 py-8">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
-          {/* Subtle accent border */}
+          {/* Accent border */}
           <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-cyan-500 via-sky-400 to-blue-500" />
 
           <div className="mb-6 text-center">
@@ -70,13 +87,38 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </p>
           </div>
 
+          {resetSuccessNotice && (
+            <div className="mb-5 p-3 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-xs text-emerald-300">
+              {resetSuccessNotice}
+            </div>
+          )}
+
           {displayError && (
             <div
               id="login-error-banner"
-              className="mb-5 p-3 rounded-lg bg-rose-950/50 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-300"
+              className={`mb-5 p-3 rounded-lg flex items-start gap-2.5 text-xs ${
+                isLockoutError
+                  ? 'bg-amber-950/60 border border-amber-500/40 text-amber-200'
+                  : 'bg-rose-950/50 border border-rose-500/30 text-rose-300'
+              }`}
             >
-              <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
-              <span>{displayError}</span>
+              {isLockoutError ? (
+                <ShieldAlert size={16} className="text-amber-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <span>{displayError}</span>
+                {isLockoutError && (
+                  <button
+                    type="button"
+                    onClick={() => setIsForgotModalOpen(true)}
+                    className="block mt-1.5 text-cyan-400 font-semibold underline cursor-pointer hover:text-cyan-300"
+                  >
+                    Reset password now to unlock
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -114,6 +156,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 >
                   Password
                 </label>
+                <button
+                  type="button"
+                  id="forgot-password-link"
+                  onClick={() => setIsForgotModalOpen(true)}
+                  className="text-[11px] text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
+                >
+                  Forgot Password?
+                </button>
               </div>
               <div className="relative">
                 <Lock
@@ -122,14 +172,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 />
                 <input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   autoComplete="current-password"
-                  placeholder="••••••••"
+                  placeholder="••••••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
+                  className="w-full pl-9 pr-10 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-colors"
                 />
+                <button
+                  type="button"
+                  id="toggle-login-password-visibility"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
               </div>
             </div>
 
@@ -179,9 +238,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         </div>
       </div>
 
+      {/* Forgot Password Modal */}
+      <ForgotPasswordModal
+        isOpen={isForgotModalOpen}
+        onClose={() => setIsForgotModalOpen(false)}
+        initialEmail={email}
+        onSuccess={() => {
+          setResetSuccessNotice('Password reset successfully! Please sign in with your new password.');
+        }}
+      />
+
       {/* Footer */}
       <div className="p-6 text-center text-[11px] text-slate-500">
-        NOVA CAD AI • Phase 1 Foundation Architecture
+        NOVA CAD AI • Hardened Authentication Architecture
       </div>
     </div>
   );
