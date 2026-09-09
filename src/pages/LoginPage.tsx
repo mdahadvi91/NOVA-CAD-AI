@@ -7,7 +7,6 @@ import {
   Mail,
   ArrowRight,
   AlertCircle,
-  KeyRound,
   Eye,
   EyeOff,
   ShieldAlert,
@@ -46,14 +45,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     } catch {
       // Handled by AuthContext and displayed below
     }
-  };
-
-  const handleFillDemo = () => {
-    setEmail('demo@novacad.ai');
-    setPassword('NovaArchitect2026!');
-    clearError();
-    setLocalError(null);
-    setResetSuccessNotice(null);
   };
 
   const displayError = localError || error;
@@ -212,19 +203,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </button>
           </form>
 
-          {/* Demo User Fast-Fill Badge */}
-          <div className="mt-5 pt-4 border-t border-slate-800">
-            <button
-              type="button"
-              id="fill-demo-credentials-btn"
-              onClick={handleFillDemo}
-              className="w-full py-2 px-3 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs text-cyan-300 font-mono flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <KeyRound size={14} className="text-cyan-400" />
-              <span>Use Demo Account (demo@novacad.ai)</span>
-            </button>
-          </div>
-
+          {/* Navigation to Registration */}
           <div className="mt-6 text-center text-xs text-slate-400">
             Don&apos;t have an account yet?{' '}
             <button

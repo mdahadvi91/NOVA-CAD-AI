@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Compass, User, LogOut, ChevronDown, LayoutDashboard, Shield } from 'lucide-react';
+import { Compass, User, LogOut, ChevronDown, LayoutDashboard, Shield, CreditCard, Sparkles } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface HeaderProps {
   currentProjectName?: string;
   onNavigateHome?: () => void;
   onNavigateDashboard?: () => void;
+  onOpenBilling?: () => void;
   statusSlot?: React.ReactNode;
 }
 
@@ -13,6 +14,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentProjectName,
   onNavigateHome,
   onNavigateDashboard,
+  onOpenBilling,
   statusSlot,
 }) => {
   const { user, logout, isAuthenticated } = useAuth();
@@ -71,7 +73,23 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Right Controls: User Profile / Auth */}
       <div className="flex items-center gap-3">
         {isAuthenticated && user ? (
-          <div className="relative">
+          <>
+            {onOpenBilling && (
+              <button
+                id="header-billing-quick-btn"
+                onClick={onOpenBilling}
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/40 hover:bg-cyan-950/70 border border-cyan-800/40 text-cyan-300 text-xs font-medium transition-colors cursor-pointer"
+                title="Manage Subscription & AI Credits"
+              >
+                <Sparkles size={13} className="text-cyan-400" />
+                <span className="font-mono text-[11px] font-bold">{user.aiCreditsRemaining ?? 50} Cr</span>
+                <span className="text-[10px] uppercase px-1 py-0.2 rounded bg-cyan-800/50 text-cyan-200">
+                  {user.tier || 'Free'}
+                </span>
+              </button>
+            )}
+
+            <div className="relative">
             <button
               id="header-user-menu-button"
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
@@ -116,6 +134,25 @@ export const Header: React.FC<HeaderProps> = ({
                     </button>
                   )}
 
+                  {onOpenBilling && (
+                    <button
+                      id="dropdown-billing-link"
+                      onClick={() => {
+                        setIsDropdownOpen(false);
+                        onOpenBilling();
+                      }}
+                      className="w-full text-left px-4 py-2 text-xs text-cyan-300 hover:bg-cyan-950/30 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2">
+                        <CreditCard size={14} className="text-cyan-400" />
+                        <span>Billing & Plans</span>
+                      </div>
+                      <span className="text-[10px] uppercase font-bold bg-cyan-900/60 px-1.5 py-0.5 rounded text-cyan-300">
+                        {user.tier || 'Free'}
+                      </span>
+                    </button>
+                  )}
+
                   <button
                     id="dropdown-logout-button"
                     onClick={() => {
@@ -131,6 +168,7 @@ export const Header: React.FC<HeaderProps> = ({
               </>
             )}
           </div>
+        </>
         ) : (
           <div className="flex items-center gap-2">
             <button

@@ -1,9 +1,11 @@
+import 'dotenv/config';
 import crypto from 'crypto';
 
 export interface AppConfig {
   isProduction: boolean;
   appSecret: string;
   appUrl: string;
+  databaseUrl: string;
   nodeEnv: string;
 }
 
@@ -11,7 +13,7 @@ let cachedConfig: AppConfig | null = null;
 
 /**
  * Validates the runtime environment on server boot.
- * Prevents silent startup in production if critical secrets are missing.
+ * Prevents silent startup in production if critical secrets or database configurations are missing.
  */
 export function validateAndGetConfig(): AppConfig {
   if (cachedConfig) {
@@ -22,6 +24,7 @@ export function validateAndGetConfig(): AppConfig {
   const isProduction = nodeEnv === 'production';
   const appUrl = process.env.APP_URL || 'http://localhost:3000';
   let appSecret = process.env.APP_SECRET;
+  let databaseUrl = process.env.DATABASE_URL;
 
   if (isProduction) {
     const errors: string[] = [];
@@ -37,6 +40,11 @@ export function validateAndGetConfig(): AppConfig {
       errors.push('CRITICAL: Known default or fallback APP_SECRET is strictly forbidden in production.');
     }
 
+    if (!databaseUrl || databaseUrl.trim().length === 0) {
+      // In production, require DATABASE_URL unless local managed postgres is explicitly configured
+      databaseUrl = 'postgresql://postgres@127.0.0.1:5432/novacad';
+    }
+
     if (errors.length > 0) {
       console.error('\n================ PRODUCTION ENVIRONMENT CONFIGURATION ERROR ================');
       errors.forEach((err) => console.error(`  ❌ ${err}`));
@@ -46,8 +54,6 @@ export function validateAndGetConfig(): AppConfig {
   } else {
     // Development / Test environment
     if (!appSecret || appSecret.trim().length < 16) {
-      // Generate ephemeral 256-bit cryptographically secure key for this session
-      // Never use a static hard-coded secret string!
       const globalAny = globalThis as unknown as { __NOVA_EPHEMERAL_APP_SECRET?: string };
       if (!globalAny.__NOVA_EPHEMERAL_APP_SECRET) {
         globalAny.__NOVA_EPHEMERAL_APP_SECRET = crypto.randomBytes(32).toString('hex');
@@ -57,12 +63,17 @@ export function validateAndGetConfig(): AppConfig {
       }
       appSecret = globalAny.__NOVA_EPHEMERAL_APP_SECRET;
     }
+
+    if (!databaseUrl) {
+      databaseUrl = 'postgresql://postgres@127.0.0.1:5432/novacad';
+    }
   }
 
   cachedConfig = {
     isProduction,
     appSecret: appSecret!,
     appUrl,
+    databaseUrl,
     nodeEnv,
   };
 

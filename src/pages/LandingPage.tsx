@@ -104,11 +104,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           {!isAuthenticated && (
             <button
-              id="hero-demo-btn"
-              onClick={onNavigateLogin}
+              id="hero-register-btn"
+              onClick={onNavigateRegister}
               className="px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 text-sm font-semibold transition-colors cursor-pointer"
             >
-              Sign in with Demo Account
+              Create Free Account
             </button>
           )}
         </div>

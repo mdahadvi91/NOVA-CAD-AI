@@ -17,6 +17,7 @@ import { ToolPanel } from '../components/workspace/ToolPanel';
 import { PropertiesPanel } from '../components/workspace/PropertiesPanel';
 import { CommandLine } from '../components/workspace/CommandLine';
 import { Modal } from '../components/common/Modal';
+import { BillingModal } from '../components/BillingModal';
 import {
   Save,
   RotateCcw,
@@ -47,6 +48,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
   const [versions, setVersions] = useState<ProjectVersion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isBillingOpen, setIsBillingOpen] = useState(false);
 
   // Workspace View & Tool State
   const [viewState, setViewState] = useState<ViewState>({
@@ -438,6 +440,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
         currentProjectName={project.name}
         onNavigateHome={onNavigateHome}
         onNavigateDashboard={onBackToDashboard}
+        onOpenBilling={() => setIsBillingOpen(true)}
         statusSlot={
           <div className="flex items-center gap-2 sm:gap-3">
             <StatusPill
@@ -589,6 +592,9 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
           </div>
         </div>
       </Modal>
+
+      {/* Subscription & Payments Modal */}
+      <BillingModal isOpen={isBillingOpen} onClose={() => setIsBillingOpen(false)} />
     </div>
   );
 };

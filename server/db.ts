@@ -1,6 +1,6 @@
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
+import type pg from 'pg';
+import { getPostgresPool } from './postgresManager.js';
 
 export interface User {
   id: string;
@@ -11,6 +11,8 @@ export interface User {
   role: 'user' | 'admin';
   tier: 'free' | 'pro' | 'enterprise';
   subscriptionStatus: 'active' | 'trialing' | 'past_due' | 'canceled' | 'none';
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
   aiCreditsRemaining: number;
   aiCreditsTotal: number;
   emailVerified: boolean;
@@ -36,7 +38,7 @@ export interface ViewState {
 }
 
 export interface DrawingData {
-  objects: unknown[]; // Placeholder for Phase 2 DrawingObject
+  objects: unknown[];
   layers: {
     id: string;
     name: string;
@@ -87,166 +89,232 @@ export interface ProjectVersion {
   drawingData: DrawingData;
 }
 
-// Extensible schemas for future phases (Phase 2+)
-export interface DrawingObject {
+export interface PaymentTransaction {
   id: string;
-  projectId: string;
-  layerId: string;
-  type: string;
-  properties: Record<string, unknown>;
+  userId: string;
+  amountCents: number;
+  currency: string;
+  status: 'succeeded' | 'pending' | 'failed' | 'refunded';
+  provider: string;
+  stripePaymentIntentId?: string;
+  stripeInvoiceId?: string;
+  tierGranted?: string;
+  creditsGranted: number;
+  receiptUrl?: string;
   createdAt: string;
 }
 
-export interface Layer {
-  id: string;
-  projectId: string;
-  name: string;
-  color: string;
-  visible: boolean;
-  locked: boolean;
-}
-
-export interface AIRequest {
-  id: string;
-  projectId: string;
-  userId: string;
-  prompt: string;
-  status: 'pending' | 'completed' | 'failed';
-  createdAt: string;
-}
-
-export interface AIUsage {
+export interface AIUsageLog {
   id: string;
   userId: string;
-  tokensUsed: number;
+  projectId?: string;
   feature: string;
-  timestamp: string;
-}
-
-export interface ExportJob {
-  id: string;
-  projectId: string;
-  format: 'dxf' | 'dwg' | 'pdf' | 'svg';
-  status: 'pending' | 'completed' | 'failed';
+  tokensUsed: number;
+  creditsConsumed: number;
   createdAt: string;
 }
 
-export interface Subscription {
-  id: string;
-  userId: string;
-  plan: 'free' | 'pro' | 'enterprise';
-  status: 'active' | 'canceled';
-  expiresAt: string;
+// Row Mappers to convert PostgreSQL snake_case to TypeScript camelCase
+function mapUserRow(row: Record<string, unknown>): User {
+  return {
+    id: row.id as string,
+    email: row.email as string,
+    passwordHash: row.password_hash as string,
+    salt: row.salt as string,
+    name: row.name as string,
+    role: (row.role as 'user' | 'admin') || 'user',
+    tier: (row.tier as 'free' | 'pro' | 'enterprise') || 'free',
+    subscriptionStatus:
+      (row.subscription_status as 'active' | 'trialing' | 'past_due' | 'canceled' | 'none') || 'none',
+    stripeCustomerId: (row.stripe_customer_id as string) || undefined,
+    stripeSubscriptionId: (row.stripe_subscription_id as string) || undefined,
+    aiCreditsRemaining: Number(row.ai_credits_remaining ?? 50),
+    aiCreditsTotal: Number(row.ai_credits_total ?? 50),
+    emailVerified: Boolean(row.email_verified),
+    verificationToken: (row.verification_token as string) || undefined,
+    verificationTokenExpires: row.verification_token_expires
+      ? new Date(row.verification_token_expires as string).toISOString()
+      : undefined,
+    resetPasswordToken: (row.reset_password_token as string) || undefined,
+    resetPasswordExpires: row.reset_password_expires
+      ? new Date(row.reset_password_expires as string).toISOString()
+      : undefined,
+    passwordChangedAt: row.password_changed_at
+      ? new Date(row.password_changed_at as string).toISOString()
+      : undefined,
+    lastLoginAt: row.last_login_at
+      ? new Date(row.last_login_at as string).toISOString()
+      : undefined,
+    createdAt: new Date(row.created_at as string).toISOString(),
+    updatedAt: new Date(row.updated_at as string).toISOString(),
+  };
 }
 
-export interface DatabaseSchema {
-  users: Record<string, User>;
-  projects: Record<string, Project>;
-  projectVersions: Record<string, ProjectVersion[]>;
-  // Future collections
-  drawingObjects: Record<string, DrawingObject[]>;
-  layers: Record<string, Layer[]>;
-  aiRequests: Record<string, AIRequest[]>;
-  aiUsage: Record<string, AIUsage[]>;
-  exportJobs: Record<string, ExportJob[]>;
-  subscriptions: Record<string, Subscription>;
+function mapProjectRow(row: Record<string, unknown>): Project {
+  return {
+    id: row.id as string,
+    ownerId: row.owner_id as string,
+    name: row.name as string,
+    description: (row.description as string) || '',
+    units: (row.units as UnitType) || 'mm',
+    status: (row.status as 'active' | 'archived') || 'active',
+    metadata: (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata) || {},
+    drawingData:
+      typeof row.drawing_data === 'string' ? JSON.parse(row.drawing_data) : row.drawing_data || {},
+    currentVersionId: (row.current_version_id as string) || undefined,
+    createdAt: new Date(row.created_at as string).toISOString(),
+    updatedAt: new Date(row.updated_at as string).toISOString(),
+  };
 }
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const DB_FILE = path.resolve(DATA_DIR, 'nova_cad_db.json');
+function mapProjectVersionRow(row: Record<string, unknown>): ProjectVersion {
+  return {
+    id: row.id as string,
+    projectId: row.project_id as string,
+    version: Number(row.version),
+    createdBy: (row.created_by as string) || '',
+    description: (row.description as string) || '',
+    drawingData:
+      typeof row.drawing_data === 'string' ? JSON.parse(row.drawing_data) : row.drawing_data || {},
+    createdAt: new Date(row.created_at as string).toISOString(),
+  };
+}
 
-class Database {
-  private data: DatabaseSchema;
+export class Database {
+  private pool: pg.Pool | null = null;
   private isInitialized = false;
 
-  constructor() {
-    this.data = this.getDefaultSchema();
-  }
-
-  private getDefaultSchema(): DatabaseSchema {
-    return {
-      users: {},
-      projects: {},
-      projectVersions: {},
-      drawingObjects: {},
-      layers: {},
-      aiRequests: {},
-      aiUsage: {},
-      exportJobs: {},
-      subscriptions: {},
-    };
+  private getPool(): pg.Pool {
+    if (!this.pool) {
+      this.pool = getPostgresPool();
+    }
+    return this.pool;
   }
 
   public async init(): Promise<void> {
     if (this.isInitialized) return;
 
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
+    const pool = this.getPool();
 
-    if (fs.existsSync(DB_FILE)) {
-      try {
-        const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        this.data = {
-          ...this.getDefaultSchema(),
-          ...parsed,
-        };
-      } catch (err) {
-        console.error('Failed to parse database file, initializing fresh schema', err);
-        this.data = this.getDefaultSchema();
-        this.seedDemoUser();
-        await this.persist();
-      }
-    } else {
-      this.data = this.getDefaultSchema();
-      this.seedDemoUser();
-      await this.persist();
-    }
+    // DDL Migration execution in PostgreSQL
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(64) PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt VARCHAR(64) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        role VARCHAR(32) NOT NULL DEFAULT 'user',
+        tier VARCHAR(32) NOT NULL DEFAULT 'free',
+        subscription_status VARCHAR(32) NOT NULL DEFAULT 'none',
+        stripe_customer_id VARCHAR(255),
+        stripe_subscription_id VARCHAR(255),
+        ai_credits_remaining INTEGER NOT NULL DEFAULT 50,
+        ai_credits_total INTEGER NOT NULL DEFAULT 50,
+        email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+        verification_token VARCHAR(128),
+        verification_token_expires TIMESTAMPTZ,
+        reset_password_token VARCHAR(128),
+        reset_password_expires TIMESTAMPTZ,
+        password_changed_at TIMESTAMPTZ,
+        last_login_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
 
-    // Production vs Development demo user sanitization
-    const isProd = process.env.NODE_ENV === 'production';
-    if (isProd) {
-      // In production: Strictly NO default demo user, NO default password
-      if (this.data.users['usr_demo_nova']) {
-        delete this.data.users['usr_demo_nova'];
-        delete this.data.projects['prj_foundation_sample'];
-        delete this.data.projectVersions['prj_foundation_sample'];
-        await this.persist();
-      }
-    } else {
-      // In development/test mode: Seed demo user for testing if not already present
-      if (!this.data.users['usr_demo_nova']) {
-        this.seedDemoUser();
-        await this.persist();
-      }
-    }
+      CREATE TABLE IF NOT EXISTS projects (
+        id VARCHAR(64) PRIMARY KEY,
+        owner_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        units VARCHAR(16) NOT NULL DEFAULT 'mm',
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        drawing_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        current_version_id VARCHAR(64),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS project_versions (
+        id VARCHAR(64) PRIMARY KEY,
+        project_id VARCHAR(64) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL,
+        created_by VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+        description TEXT NOT NULL DEFAULT '',
+        drawing_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS payment_transactions (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount_cents INTEGER NOT NULL,
+        currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+        status VARCHAR(32) NOT NULL DEFAULT 'succeeded',
+        provider VARCHAR(32) NOT NULL DEFAULT 'stripe',
+        stripe_payment_intent_id VARCHAR(255),
+        stripe_invoice_id VARCHAR(255),
+        tier_granted VARCHAR(32),
+        credits_granted INTEGER NOT NULL DEFAULT 0,
+        receipt_url TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_usage_logs (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        project_id VARCHAR(64) REFERENCES projects(id) ON DELETE SET NULL,
+        feature VARCHAR(64) NOT NULL,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        credits_consumed INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64),
+        action VARCHAR(64) NOT NULL,
+        ip_address VARCHAR(64),
+        details JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(LOWER(email));
+      CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_project_versions_project ON project_versions(project_id);
+      CREATE INDEX IF NOT EXISTS idx_payments_user ON payment_transactions(user_id);
+    `);
+
+    // Clean up any historical demo accounts if present
+    await pool.query("DELETE FROM users WHERE email = 'demo@novacad.ai' OR id = 'usr_demo_nova'");
 
     this.isInitialized = true;
+    console.log('✅ [POSTGRESQL] Schema initialized & validated. Zero demo accounts present.');
   }
 
   /**
-   * ACID-compliant transaction manager with automatic rollback on error
+   * ACID-compliant transaction manager with automatic BEGIN, COMMIT, and ROLLBACK in PostgreSQL
    */
-  public async runTransaction<T>(operation: () => Promise<T>): Promise<T> {
+  public async runTransaction<T>(operation: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     await this.init();
-    // Snapshot current state in-memory
-    const snapshot = JSON.stringify(this.data);
+    const client = await this.getPool().connect();
     try {
-      const result = await operation();
-      await this.persist();
+      await client.query('BEGIN');
+      const result = await operation(client);
+      await client.query('COMMIT');
       return result;
     } catch (err) {
-      // ROLLBACK on failure
-      this.data = JSON.parse(snapshot);
-      await this.persist();
+      await client.query('ROLLBACK');
       throw err;
+    } finally {
+      client.release();
     }
   }
 
   /**
-   * Atomic User Registration with Starter CAD Project
-   * Guaranteed all-or-nothing atomicity. If starter project creation fails, user creation rolls back.
+   * Atomic User Registration with Starter CAD Project in PostgreSQL
+   * Guaranteed all-or-nothing atomicity.
    */
   public async registerUserAtomic(
     userData: {
@@ -260,32 +328,37 @@ class Database {
     starterProjectData: {
       name: string;
       description?: string;
-      units?: 'mm' | 'cm' | 'm' | 'in' | 'ft';
+      units?: UnitType;
     }
   ): Promise<{ user: User; starterProject: Project }> {
-    return this.runTransaction(async () => {
-      const id = `usr_${crypto.randomBytes(8).toString('hex')}`;
+    return this.runTransaction(async (client) => {
+      const userId = `usr_${crypto.randomBytes(8).toString('hex')}`;
       const now = new Date().toISOString();
-      const user: User = {
-        id,
-        email: userData.email.trim().toLowerCase(),
-        passwordHash: userData.passwordHash,
-        salt: userData.salt,
-        name: userData.name.trim(),
-        role: 'user',
-        tier: 'free',
-        subscriptionStatus: 'none',
-        aiCreditsRemaining: 50,
-        aiCreditsTotal: 50,
-        emailVerified: false,
-        verificationToken: userData.verificationToken,
-        verificationTokenExpires: userData.verificationTokenExpires,
-        createdAt: now,
-        updatedAt: now,
-      };
-      this.data.users[id] = user;
+      const normalizedEmail = userData.email.trim().toLowerCase();
 
-      // Create starter project atomically
+      const userInsert = await client.query(
+        `INSERT INTO users (
+          id, email, password_hash, salt, name, role, tier,
+          subscription_status, ai_credits_remaining, ai_credits_total,
+          email_verified, verification_token, verification_token_expires,
+          created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'user', 'free', 'none', 50, 50, FALSE, $6, $7, $8, $8)
+        RETURNING *`,
+        [
+          userId,
+          normalizedEmail,
+          userData.passwordHash,
+          userData.salt,
+          userData.name.trim(),
+          userData.verificationToken || null,
+          userData.verificationTokenExpires || null,
+          now,
+        ]
+      );
+
+      const user = mapUserRow(userInsert.rows[0]);
+
+      // Seed calibrated initial drawing
       const projectId = `prj_${crypto.randomBytes(8).toString('hex')}`;
       const versionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
       const initialDrawing: DrawingData = {
@@ -309,139 +382,59 @@ class Database {
         },
       };
 
-      const project: Project = {
-        id: projectId,
-        ownerId: user.id,
-        name: starterProjectData.name,
-        description: starterProjectData.description || '',
-        units: starterProjectData.units || 'mm',
-        status: 'active',
-        metadata: {
-          gridSpacing: 20,
-          snapTolerance: 10,
-          precision: 2,
-        },
-        createdAt: now,
-        updatedAt: now,
-        currentVersionId: versionId,
-        drawingData: initialDrawing,
-      };
-
-      this.data.projects[projectId] = project;
-      this.data.projectVersions[projectId] = [
-        {
-          id: versionId,
-          projectId,
-          version: 1,
-          createdAt: now,
-          createdBy: user.id,
-          description: 'Initial Phase 1 Workspace Calibration',
-          drawingData: initialDrawing,
-        },
-      ];
-
-      return { user, starterProject: project };
-    });
-  }
-
-  private seedDemoUser(): void {
-    const salt = crypto.randomBytes(16).toString('hex');
-    // SHA-512 fallback salt hash for demo user; upon first login verifyPassword can automatically rehash with Argon2id
-    const passwordHash = crypto.pbkdf2Sync('NovaArchitect2026!', salt, 1000, 64, 'sha512').toString('hex');
-    const demoUser: User = {
-      id: 'usr_demo_nova',
-      email: 'demo@novacad.ai',
-      passwordHash,
-      salt,
-      name: 'Architect Demo',
-      role: 'user',
-      tier: 'pro',
-      subscriptionStatus: 'active',
-      aiCreditsRemaining: 1000,
-      aiCreditsTotal: 1000,
-      emailVerified: true,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    this.data.users[demoUser.id] = demoUser;
-
-    // Seed a sample project for the demo user
-    const sampleProjectId = 'prj_foundation_sample';
-    const sampleDrawingData: DrawingData = {
-      objects: [],
-      layers: [
-        { id: 'layer_0', name: '0 - General', color: '#00ffff', visible: true, locked: false },
-        { id: 'layer_walls', name: 'A-WALL (Walls)', color: '#ffffff', visible: true, locked: false },
-        { id: 'layer_dims', name: 'A-DIMS (Dimensions)', color: '#ffb020', visible: true, locked: false },
-      ],
-      viewState: {
-        panX: 0,
-        panY: 0,
-        zoom: 1.0,
-        gridVisible: true,
-        gridSnap: true,
-        gridSize: 20,
-      },
-      calibration: {
-        originX: 0,
-        originY: 0,
-        scaleRefLength: 1000,
-      },
-    };
-
-    const sampleProject: Project = {
-      id: sampleProjectId,
-      ownerId: demoUser.id,
-      name: 'Nova Architectural Prototype A-101',
-      description: 'Phase 1 baseline workspace floorplan layout and coordinate calibration.',
-      units: 'mm',
-      status: 'active',
-      metadata: {
+      const projectMetadata: ProjectMetadata = {
         gridSpacing: 20,
         snapTolerance: 10,
         precision: 2,
-        defaultLayerId: 'layer_0',
-      },
-      createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-      updatedAt: new Date().toISOString(),
-      currentVersionId: 'ver_sample_1',
-      drawingData: sampleDrawingData,
-    };
+      };
 
-    this.data.projects[sampleProject.id] = sampleProject;
-    this.data.projectVersions[sampleProjectId] = [
-      {
-        id: 'ver_sample_1',
-        projectId: sampleProjectId,
-        version: 1,
-        createdAt: new Date().toISOString(),
-        createdBy: demoUser.id,
-        description: 'Initial Phase 1 Workspace Foundation Setup',
-        drawingData: sampleDrawingData,
-      },
-    ];
-  }
+      const projectInsert = await client.query(
+        `INSERT INTO projects (
+          id, owner_id, name, description, units, status,
+          metadata, drawing_data, current_version_id, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9)
+        RETURNING *`,
+        [
+          projectId,
+          user.id,
+          starterProjectData.name,
+          starterProjectData.description || 'Calibrated CAD engineering workspace with precision grid and standard layers.',
+          starterProjectData.units || 'mm',
+          JSON.stringify(projectMetadata),
+          JSON.stringify(initialDrawing),
+          versionId,
+          now,
+        ]
+      );
 
-  private async persist(): Promise<void> {
-    const tmpFile = `${DB_FILE}.tmp`;
-    const payload = JSON.stringify(this.data, null, 2);
-    await fs.promises.writeFile(tmpFile, payload, 'utf-8');
-    await fs.promises.rename(tmpFile, DB_FILE);
+      const starterProject = mapProjectRow(projectInsert.rows[0]);
+
+      await client.query(
+        `INSERT INTO project_versions (
+          id, project_id, version, created_by, description, drawing_data, created_at
+        ) VALUES ($1, $2, 1, $3, 'Initial Phase 1 Workspace Calibration', $4, $5)`,
+        [versionId, projectId, user.id, JSON.stringify(initialDrawing), now]
+      );
+
+      return { user, starterProject };
+    });
   }
 
   // --- USER METHODS ---
   public async findUserByEmail(email: string): Promise<User | null> {
     await this.init();
-    const normalized = email.trim().toLowerCase();
-    const user = Object.values(this.data.users).find(
-      (u) => u.email.toLowerCase() === normalized
-    );
-    return user || null;
+    const res = await this.getPool().query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [
+      email.trim(),
+    ]);
+    if (res.rows.length === 0) return null;
+    return mapUserRow(res.rows[0]);
   }
 
   public async findUserById(id: string): Promise<User | null> {
     await this.init();
-    return this.data.users[id] || null;
+    const res = await this.getPool().query('SELECT * FROM users WHERE id = $1', [id]);
+    if (res.rows.length === 0) return null;
+    return mapUserRow(res.rows[0]);
   }
 
   public async createUser(userData: {
@@ -455,68 +448,145 @@ class Database {
     await this.init();
     const id = `usr_${crypto.randomBytes(8).toString('hex')}`;
     const now = new Date().toISOString();
-    const user: User = {
-      id,
-      email: userData.email.trim().toLowerCase(),
-      passwordHash: userData.passwordHash,
-      salt: userData.salt,
-      name: userData.name.trim(),
-      role: 'user',
-      tier: 'free',
-      subscriptionStatus: 'none',
-      aiCreditsRemaining: 50,
-      aiCreditsTotal: 50,
-      emailVerified: false,
-      verificationToken: userData.verificationToken,
-      verificationTokenExpires: userData.verificationTokenExpires,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.data.users[id] = user;
-    await this.persist();
-    return user;
+    const res = await this.getPool().query(
+      `INSERT INTO users (
+        id, email, password_hash, salt, name, role, tier,
+        subscription_status, ai_credits_remaining, ai_credits_total,
+        email_verified, verification_token, verification_token_expires,
+        created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, 'user', 'free', 'none', 50, 50, FALSE, $6, $7, $8, $8)
+      RETURNING *`,
+      [
+        id,
+        userData.email.trim().toLowerCase(),
+        userData.passwordHash,
+        userData.salt,
+        userData.name.trim(),
+        userData.verificationToken || null,
+        userData.verificationTokenExpires || null,
+        now,
+      ]
+    );
+    return mapUserRow(res.rows[0]);
   }
 
   public async updateUser(userId: string, partial: Partial<User>): Promise<User | null> {
     await this.init();
-    const user = this.data.users[userId];
-    if (!user) return null;
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
 
-    const updated: User = {
-      ...user,
-      ...partial,
-      updatedAt: new Date().toISOString(),
-    };
-    this.data.users[userId] = updated;
-    await this.persist();
-    return updated;
+    if (partial.name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      values.push(partial.name.trim());
+    }
+    if (partial.role !== undefined) {
+      fields.push(`role = $${idx++}`);
+      values.push(partial.role);
+    }
+    if (partial.tier !== undefined) {
+      fields.push(`tier = $${idx++}`);
+      values.push(partial.tier);
+    }
+    if (partial.subscriptionStatus !== undefined) {
+      fields.push(`subscription_status = $${idx++}`);
+      values.push(partial.subscriptionStatus);
+    }
+    if (partial.stripeCustomerId !== undefined) {
+      fields.push(`stripe_customer_id = $${idx++}`);
+      values.push(partial.stripeCustomerId);
+    }
+    if (partial.stripeSubscriptionId !== undefined) {
+      fields.push(`stripe_subscription_id = $${idx++}`);
+      values.push(partial.stripeSubscriptionId);
+    }
+    if (partial.aiCreditsRemaining !== undefined) {
+      fields.push(`ai_credits_remaining = $${idx++}`);
+      values.push(partial.aiCreditsRemaining);
+    }
+    if (partial.aiCreditsTotal !== undefined) {
+      fields.push(`ai_credits_total = $${idx++}`);
+      values.push(partial.aiCreditsTotal);
+    }
+    if (partial.emailVerified !== undefined) {
+      fields.push(`email_verified = $${idx++}`);
+      values.push(partial.emailVerified);
+    }
+    if (partial.verificationToken !== undefined) {
+      fields.push(`verification_token = $${idx++}`);
+      values.push(partial.verificationToken);
+    }
+    if (partial.verificationTokenExpires !== undefined) {
+      fields.push(`verification_token_expires = $${idx++}`);
+      values.push(partial.verificationTokenExpires);
+    }
+    if (partial.resetPasswordToken !== undefined) {
+      fields.push(`reset_password_token = $${idx++}`);
+      values.push(partial.resetPasswordToken);
+    }
+    if (partial.resetPasswordExpires !== undefined) {
+      fields.push(`reset_password_expires = $${idx++}`);
+      values.push(partial.resetPasswordExpires);
+    }
+    if (partial.passwordChangedAt !== undefined) {
+      fields.push(`password_changed_at = $${idx++}`);
+      values.push(partial.passwordChangedAt);
+    }
+    if (partial.lastLoginAt !== undefined) {
+      fields.push(`last_login_at = $${idx++}`);
+      values.push(partial.lastLoginAt);
+    }
+
+    if (fields.length === 0) {
+      return this.findUserById(userId);
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(userId);
+
+    const query = `UPDATE users SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`;
+    const res = await this.getPool().query(query, values);
+    if (res.rows.length === 0) return null;
+    return mapUserRow(res.rows[0]);
   }
 
   public async findUserByVerificationToken(token: string): Promise<User | null> {
     await this.init();
     if (!token) return null;
-    const user = Object.values(this.data.users).find((u) => u.verificationToken === token);
-    return user || null;
+    const res = await this.getPool().query(
+      'SELECT * FROM users WHERE verification_token = $1 AND verification_token_expires > NOW()',
+      [token]
+    );
+    if (res.rows.length === 0) return null;
+    return mapUserRow(res.rows[0]);
   }
 
   public async findUserByResetToken(token: string): Promise<User | null> {
     await this.init();
     if (!token) return null;
-    const user = Object.values(this.data.users).find((u) => u.resetPasswordToken === token);
-    return user || null;
+    const res = await this.getPool().query(
+      'SELECT * FROM users WHERE reset_password_token = $1 AND reset_password_expires > NOW()',
+      [token]
+    );
+    if (res.rows.length === 0) return null;
+    return mapUserRow(res.rows[0]);
   }
 
   // --- PROJECT METHODS ---
   public async getProjectsForUser(userId: string): Promise<Project[]> {
     await this.init();
-    return Object.values(this.data.projects)
-      .filter((p) => p.ownerId === userId)
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    const res = await this.getPool().query(
+      "SELECT * FROM projects WHERE owner_id = $1 AND status != 'archived' ORDER BY updated_at DESC",
+      [userId]
+    );
+    return res.rows.map(mapProjectRow);
   }
 
   public async getProjectById(projectId: string): Promise<Project | null> {
     await this.init();
-    return this.data.projects[projectId] || null;
+    const res = await this.getPool().query('SELECT * FROM projects WHERE id = $1', [projectId]);
+    if (res.rows.length === 0) return null;
+    return mapProjectRow(res.rows[0]);
   }
 
   public async createProject(data: {
@@ -526,67 +596,68 @@ class Database {
     units?: UnitType;
     metadata?: ProjectMetadata;
   }): Promise<Project> {
-    await this.init();
-    const id = `prj_${crypto.randomBytes(8).toString('hex')}`;
-    const now = new Date().toISOString();
-    const units = data.units || 'mm';
+    return this.runTransaction(async (client) => {
+      const id = `prj_${crypto.randomBytes(8).toString('hex')}`;
+      const versionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
+      const units = data.units || 'mm';
 
-    const defaultDrawingData: DrawingData = {
-      objects: [],
-      layers: [
-        { id: 'layer_0', name: '0 - Standard', color: '#00e5ff', visible: true, locked: false },
-        { id: 'layer_geom', name: 'A-GEOM', color: '#ffffff', visible: true, locked: false },
-      ],
-      viewState: {
-        panX: 0,
-        panY: 0,
-        zoom: 1.0,
-        gridVisible: true,
-        gridSnap: true,
-        gridSize: units === 'm' ? 1 : units === 'ft' ? 1 : 20,
-      },
-      calibration: {
-        originX: 0,
-        originY: 0,
-        scaleRefLength: units === 'm' ? 10 : 1000,
-      },
-    };
+      const defaultDrawingData: DrawingData = {
+        objects: [],
+        layers: [
+          { id: 'layer_0', name: '0 - Standard', color: '#00e5ff', visible: true, locked: false },
+          { id: 'layer_geom', name: 'A-GEOM', color: '#ffffff', visible: true, locked: false },
+        ],
+        viewState: {
+          panX: 0,
+          panY: 0,
+          zoom: 1.0,
+          gridVisible: true,
+          gridSnap: true,
+          gridSize: units === 'm' ? 1 : units === 'ft' ? 1 : 20,
+        },
+        calibration: {
+          originX: 0,
+          originY: 0,
+          scaleRefLength: units === 'm' ? 10 : 1000,
+        },
+      };
 
-    const initialVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
-    const project: Project = {
-      id,
-      ownerId: data.ownerId,
-      name: data.name.trim(),
-      description: data.description?.trim() || '',
-      units,
-      status: 'active',
-      metadata: {
+      const meta: ProjectMetadata = {
         gridSpacing: units === 'm' ? 1 : 20,
         snapTolerance: 10,
         precision: 2,
         ...data.metadata,
-      },
-      createdAt: now,
-      updatedAt: now,
-      currentVersionId: initialVersionId,
-      drawingData: defaultDrawingData,
-    };
+      };
 
-    this.data.projects[id] = project;
-    this.data.projectVersions[id] = [
-      {
-        id: initialVersionId,
-        projectId: id,
-        version: 1,
-        createdAt: now,
-        createdBy: data.ownerId,
-        description: 'Initial Project Creation',
-        drawingData: defaultDrawingData,
-      },
-    ];
+      const res = await client.query(
+        `INSERT INTO projects (
+          id, owner_id, name, description, units, status,
+          metadata, drawing_data, current_version_id, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9)
+        RETURNING *`,
+        [
+          id,
+          data.ownerId,
+          data.name.trim(),
+          data.description?.trim() || '',
+          units,
+          JSON.stringify(meta),
+          JSON.stringify(defaultDrawingData),
+          versionId,
+          now,
+        ]
+      );
 
-    await this.persist();
-    return project;
+      await client.query(
+        `INSERT INTO project_versions (
+          id, project_id, version, created_by, description, drawing_data, created_at
+        ) VALUES ($1, $2, 1, $3, 'Initial Project Creation', $4, $5)`,
+        [versionId, id, data.ownerId, JSON.stringify(defaultDrawingData), now]
+      );
+
+      return mapProjectRow(res.rows[0]);
+    });
   }
 
   public async updateProject(
@@ -600,72 +671,94 @@ class Database {
     }
   ): Promise<Project | null> {
     await this.init();
-    const project = this.data.projects[projectId];
-    if (!project) return null;
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    let idx = 1;
 
-    const now = new Date().toISOString();
-    if (updates.name !== undefined) project.name = updates.name.trim();
-    if (updates.description !== undefined) project.description = updates.description.trim();
-    if (updates.units !== undefined) project.units = updates.units;
+    if (updates.name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      values.push(updates.name.trim());
+    }
+    if (updates.description !== undefined) {
+      fields.push(`description = $${idx++}`);
+      values.push(updates.description.trim());
+    }
+    if (updates.units !== undefined) {
+      fields.push(`units = $${idx++}`);
+      values.push(updates.units);
+    }
     if (updates.metadata !== undefined) {
-      project.metadata = { ...project.metadata, ...updates.metadata };
+      fields.push(`metadata = $${idx++}`);
+      values.push(JSON.stringify(updates.metadata));
     }
     if (updates.drawingData !== undefined) {
-      project.drawingData = updates.drawingData;
+      fields.push(`drawing_data = $${idx++}`);
+      values.push(JSON.stringify(updates.drawingData));
     }
-    project.updatedAt = now;
 
-    await this.persist();
-    return project;
+    if (fields.length === 0) {
+      return this.getProjectById(projectId);
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(projectId);
+
+    const query = `UPDATE projects SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`;
+    const res = await this.getPool().query(query, values);
+    if (res.rows.length === 0) return null;
+    return mapProjectRow(res.rows[0]);
   }
 
   public async deleteProject(projectId: string): Promise<boolean> {
     await this.init();
-    if (!this.data.projects[projectId]) return false;
-
-    delete this.data.projects[projectId];
-    delete this.data.projectVersions[projectId];
-    delete this.data.drawingObjects[projectId];
-    delete this.data.layers[projectId];
-
-    await this.persist();
-    return true;
+    const res = await this.getPool().query('DELETE FROM projects WHERE id = $1', [projectId]);
+    return (res.rowCount ?? 0) > 0;
   }
 
   public async duplicateProject(projectId: string, newOwnerId: string): Promise<Project | null> {
-    await this.init();
-    const source = this.data.projects[projectId];
+    const source = await this.getProjectById(projectId);
     if (!source) return null;
 
-    const newId = `prj_${crypto.randomBytes(8).toString('hex')}`;
-    const now = new Date().toISOString();
-    const newVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+    return this.runTransaction(async (client) => {
+      const newId = `prj_${crypto.randomBytes(8).toString('hex')}`;
+      const newVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
 
-    const newProject: Project = {
-      ...JSON.parse(JSON.stringify(source)),
-      id: newId,
-      ownerId: newOwnerId,
-      name: `${source.name} (Copy)`,
-      createdAt: now,
-      updatedAt: now,
-      currentVersionId: newVersionId,
-    };
+      const res = await client.query(
+        `INSERT INTO projects (
+          id, owner_id, name, description, units, status,
+          metadata, drawing_data, current_version_id, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $9)
+        RETURNING *`,
+        [
+          newId,
+          newOwnerId,
+          `${source.name} (Copy)`,
+          source.description,
+          source.units,
+          JSON.stringify(source.metadata),
+          JSON.stringify(source.drawingData),
+          newVersionId,
+          now,
+        ]
+      );
 
-    this.data.projects[newId] = newProject;
-    this.data.projectVersions[newId] = [
-      {
-        id: newVersionId,
-        projectId: newId,
-        version: 1,
-        createdAt: now,
-        createdBy: newOwnerId,
-        description: `Duplicated from ${source.name}`,
-        drawingData: JSON.parse(JSON.stringify(source.drawingData)),
-      },
-    ];
+      await client.query(
+        `INSERT INTO project_versions (
+          id, project_id, version, created_by, description, drawing_data, created_at
+        ) VALUES ($1, $2, 1, $3, $4, $5, $6)`,
+        [
+          newVersionId,
+          newId,
+          newOwnerId,
+          `Duplicated from ${source.name}`,
+          JSON.stringify(source.drawingData),
+          now,
+        ]
+      );
 
-    await this.persist();
-    return newProject;
+      return mapProjectRow(res.rows[0]);
+    });
   }
 
   public async saveProjectVersion(
@@ -674,39 +767,174 @@ class Database {
     drawingData: DrawingData,
     description = 'Manual save'
   ): Promise<{ project: Project; version: ProjectVersion } | null> {
-    await this.init();
-    const project = this.data.projects[projectId];
-    if (!project) return null;
+    return this.runTransaction(async (client) => {
+      const projectRes = await client.query('SELECT * FROM projects WHERE id = $1', [projectId]);
+      if (projectRes.rows.length === 0) return null;
 
-    const now = new Date().toISOString();
-    const versions = this.data.projectVersions[projectId] || [];
-    const nextVersionNum = versions.length > 0 ? Math.max(...versions.map((v) => v.version)) + 1 : 1;
+      const versionRes = await client.query(
+        'SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM project_versions WHERE project_id = $1',
+        [projectId]
+      );
+      const nextVersion = Number(versionRes.rows[0].next_version || 1);
 
-    const newVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
-    const newVersion: ProjectVersion = {
-      id: newVersionId,
-      projectId,
-      version: nextVersionNum,
-      createdAt: now,
-      createdBy: userId,
-      description,
-      drawingData: JSON.parse(JSON.stringify(drawingData)),
-    };
+      const newVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
 
-    versions.push(newVersion);
-    this.data.projectVersions[projectId] = versions;
+      await client.query(
+        `INSERT INTO project_versions (
+          id, project_id, version, created_by, description, drawing_data, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [newVersionId, projectId, nextVersion, userId, description, JSON.stringify(drawingData), now]
+      );
 
-    project.drawingData = drawingData;
-    project.currentVersionId = newVersionId;
-    project.updatedAt = now;
+      const updatedProjectRes = await client.query(
+        `UPDATE projects
+         SET drawing_data = $1, current_version_id = $2, updated_at = $3
+         WHERE id = $4
+         RETURNING *`,
+        [JSON.stringify(drawingData), newVersionId, now, projectId]
+      );
 
-    await this.persist();
-    return { project, version: newVersion };
+      const project = mapProjectRow(updatedProjectRes.rows[0]);
+      const version: ProjectVersion = {
+        id: newVersionId,
+        projectId,
+        version: nextVersion,
+        createdBy: userId,
+        description,
+        drawingData,
+        createdAt: now,
+      };
+
+      return { project, version };
+    });
   }
 
   public async getProjectVersions(projectId: string): Promise<ProjectVersion[]> {
     await this.init();
-    return (this.data.projectVersions[projectId] || []).sort((a, b) => b.version - a.version);
+    const res = await this.getPool().query(
+      'SELECT * FROM project_versions WHERE project_id = $1 ORDER BY version DESC',
+      [projectId]
+    );
+    return res.rows.map(mapProjectVersionRow);
+  }
+
+  // --- PAYMENT & STRIPE TRANSACTION METHODS ---
+  public async recordPayment(payment: {
+    userId: string;
+    amountCents: number;
+    currency?: string;
+    status?: 'succeeded' | 'pending' | 'failed' | 'refunded';
+    provider?: string;
+    stripePaymentIntentId?: string;
+    stripeInvoiceId?: string;
+    tierGranted?: string;
+    creditsGranted?: number;
+    receiptUrl?: string;
+  }): Promise<PaymentTransaction> {
+    return this.runTransaction(async (client) => {
+      const id = `tx_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
+
+      const res = await client.query(
+        `INSERT INTO payment_transactions (
+          id, user_id, amount_cents, currency, status, provider,
+          stripe_payment_intent_id, stripe_invoice_id, tier_granted, credits_granted,
+          receipt_url, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *`,
+        [
+          id,
+          payment.userId,
+          payment.amountCents,
+          payment.currency || 'USD',
+          payment.status || 'succeeded',
+          payment.provider || 'stripe',
+          payment.stripePaymentIntentId || null,
+          payment.stripeInvoiceId || null,
+          payment.tierGranted || null,
+          payment.creditsGranted || 0,
+          payment.receiptUrl || null,
+          now,
+        ]
+      );
+
+      // If tier or credits granted, apply directly to user record atomically
+      if (payment.tierGranted || (payment.creditsGranted && payment.creditsGranted > 0)) {
+        await client.query(
+          `UPDATE users
+           SET tier = COALESCE($1, tier),
+               subscription_status = 'active',
+               ai_credits_remaining = ai_credits_remaining + $2,
+               ai_credits_total = ai_credits_total + $2,
+               updated_at = $3
+           WHERE id = $4`,
+          [payment.tierGranted || null, payment.creditsGranted || 0, now, payment.userId]
+        );
+      }
+
+      const row = res.rows[0];
+      return {
+        id: row.id,
+        userId: row.user_id,
+        amountCents: Number(row.amount_cents),
+        currency: row.currency,
+        status: row.status,
+        provider: row.provider,
+        stripePaymentIntentId: row.stripe_payment_intent_id || undefined,
+        stripeInvoiceId: row.stripe_invoice_id || undefined,
+        tierGranted: row.tier_granted || undefined,
+        creditsGranted: Number(row.credits_granted),
+        receiptUrl: row.receipt_url || undefined,
+        createdAt: new Date(row.created_at).toISOString(),
+      };
+    });
+  }
+
+  public async getUserPayments(userId: string): Promise<PaymentTransaction[]> {
+    await this.init();
+    const res = await this.getPool().query(
+      'SELECT * FROM payment_transactions WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId]
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      amountCents: Number(row.amount_cents),
+      currency: row.currency,
+      status: row.status,
+      provider: row.provider,
+      stripePaymentIntentId: row.stripe_payment_intent_id || undefined,
+      stripeInvoiceId: row.stripe_invoice_id || undefined,
+      tierGranted: row.tier_granted || undefined,
+      creditsGranted: Number(row.credits_granted),
+      receiptUrl: row.receipt_url || undefined,
+      createdAt: new Date(row.created_at).toISOString(),
+    }));
+  }
+
+  // --- AI USAGE LOGGING ---
+  public async logAiUsage(data: {
+    userId: string;
+    projectId?: string;
+    feature: string;
+    tokensUsed?: number;
+    creditsConsumed?: number;
+  }): Promise<void> {
+    await this.init();
+    const id = `ai_${crypto.randomBytes(8).toString('hex')}`;
+    await this.getPool().query(
+      `INSERT INTO ai_usage_logs (id, user_id, project_id, feature, tokens_used, credits_consumed)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        id,
+        data.userId,
+        data.projectId || null,
+        data.feature,
+        data.tokensUsed || 0,
+        data.creditsConsumed || 1,
+      ]
+    );
   }
 }
 

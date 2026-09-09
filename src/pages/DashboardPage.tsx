@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { Header } from '../components/common/Header';
 import { ProjectCard } from '../components/dashboard/ProjectCard';
 import { CreateProjectModal } from '../components/dashboard/CreateProjectModal';
+import { BillingModal } from '../components/BillingModal';
 import { Modal } from '../components/common/Modal';
 import {
   FolderPlus,
@@ -31,6 +32,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isBillingOpen, setIsBillingOpen] = useState(false);
 
   // Rename Modal state
   const [projectToRename, setProjectToRename] = useState<Project | null>(null);
@@ -122,7 +124,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      <Header onNavigateHome={onNavigateHome} />
+      <Header onNavigateHome={onNavigateHome} onOpenBilling={() => setIsBillingOpen(true)} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Top Control Bar */}
@@ -351,6 +353,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
       </Modal>
+
+      {/* Billing & Subscription Modal */}
+      <BillingModal isOpen={isBillingOpen} onClose={() => setIsBillingOpen(false)} />
     </div>
   );
 };

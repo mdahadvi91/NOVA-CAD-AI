@@ -204,6 +204,65 @@ class ApiService {
   public async getProjectVersions(id: string): Promise<{ versions: ProjectVersion[] }> {
     return this.request<{ versions: ProjectVersion[] }>(`/api/projects/${id}/versions`);
   }
+
+  // --- Payment & Billing APIs ---
+  public async getPaymentPlans(): Promise<{
+    plans: {
+      id: string;
+      name: string;
+      priceCents: number;
+      currency: string;
+      interval: string;
+      description: string;
+      aiCreditsIncluded: number;
+      features: string[];
+    }[];
+    creditPacks: {
+      id: string;
+      name: string;
+      priceCents: number;
+      currency: string;
+      interval: string;
+      description: string;
+      aiCreditsIncluded: number;
+      features: string[];
+    }[];
+  }> {
+    return this.request('/api/payments/plans');
+  }
+
+  public async getPaymentHistory(): Promise<{
+    tier: string;
+    subscriptionStatus: string;
+    aiCreditsRemaining: number;
+    aiCreditsTotal: number;
+    payments: {
+      id: string;
+      userId: string;
+      amountCents: number;
+      currency: string;
+      status: string;
+      provider: string;
+      tierGranted?: string;
+      creditsGranted: number;
+      receiptUrl?: string;
+      createdAt: string;
+    }[];
+  }> {
+    return this.request('/api/payments/history');
+  }
+
+  public async processCheckout(planId: string): Promise<{
+    success: boolean;
+    message: string;
+    payment: unknown;
+    user: unknown;
+  }> {
+    return this.request('/api/payments/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    });
+  }
 }
 
 export const api = new ApiService();

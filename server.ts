@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
@@ -5,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import { validateAndGetConfig } from './server/config.js';
 import authRoutes from './server/routes/auth.js';
 import projectRoutes from './server/routes/projects.js';
+import paymentRoutes from './server/routes/payments.js';
 import { db } from './server/db.js';
 
 async function startServer() {
@@ -32,6 +34,7 @@ async function startServer() {
   // Mount API routes
   app.use('/api/auth', authRoutes);
   app.use('/api/projects', projectRoutes);
+  app.use('/api/payments', paymentRoutes);
 
   // Global 404 handler for unknown API routes
   app.all('/api/*', (_req, res) => {

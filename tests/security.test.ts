@@ -134,12 +134,11 @@ async function runTests() {
   const initialUserCount = (await db.getProjectsForUser(registeredUser.id)).length;
 
   try {
-    await db.runTransaction(async () => {
-      await db.createProject({
-        ownerId: registeredUser.id,
-        name: 'Project to be rolled back',
-        units: 'mm',
-      });
+    await db.runTransaction(async (client) => {
+      await client.query(
+        "INSERT INTO projects (id, owner_id, name, description, units, status) VALUES ($1, $2, 'Project to be rolled back', '', 'mm', 'active')",
+        [`prj_rollback_${Date.now()}`, registeredUser.id]
+      );
       // Force an error mid-transaction to test ACID rollback
       throw new Error('Simulated atomic transaction failure!');
     });
@@ -181,6 +180,42 @@ async function runTests() {
   assert(!userBProjects.some(p => p.id === starterProject.id), "User B's project query does NOT leak User A's projects");
 
   // -------------------------------------------------------------
+  // SUITE 7: PostgreSQL Server Database & Payment Security
+  // -------------------------------------------------------------
+  console.log('\n📌 [SUITE 7] PostgreSQL Production Database & Payment Transactions');
+
+  // Verify demo user absence
+  const demoCheck = await db.findUserByEmail('demo@novacad.ai');
+  assert(demoCheck === null, 'Eliminates pre-seeded demo user account from database completely');
+
+  // Test Payment Transaction & Credit Fulfillment in PostgreSQL
+  const paymentTx = await db.recordPayment({
+    userId: registeredUser.id,
+    amountCents: 2900, // $29.00 Pro Tier Subscription
+    currency: 'USD',
+    status: 'succeeded',
+    provider: 'stripe',
+    stripePaymentIntentId: `pi_test_${Date.now()}`,
+    tierGranted: 'pro',
+    creditsGranted: 500,
+    receiptUrl: 'https://pay.stripe.com/receipts/test_123',
+  });
+
+  assert(paymentTx.status === 'succeeded', 'Records payment transaction successfully in PostgreSQL');
+  assert(paymentTx.tierGranted === 'pro', 'Grants upgraded subscription tier');
+
+  // Verify User was atomically upgraded
+  const upgradedUser = await db.findUserById(registeredUser.id);
+  assert(upgradedUser?.tier === 'pro', 'Atomically sets user tier to pro in PostgreSQL');
+  assert(upgradedUser?.subscriptionStatus === 'active', 'Sets subscription status to active');
+  assert((upgradedUser?.aiCreditsRemaining ?? 0) >= 550, 'Atomically fulfills 500 AI credits to user balance');
+
+  // Verify payment history query
+  const userPayments = await db.getUserPayments(registeredUser.id);
+  assert(userPayments.length >= 1, 'Queries user payment history from payment_transactions table');
+  assert(userPayments[0].amountCents === 2900, 'Matches recorded payment amount');
+
+  // -------------------------------------------------------------
   // SUMMARY
   // -------------------------------------------------------------
   console.log('\n================================================================');
@@ -189,6 +224,8 @@ async function runTests() {
 
   if (failedTests > 0) {
     process.exit(1);
+  } else {
+    process.exit(0);
   }
 }
 
