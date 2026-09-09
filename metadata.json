@@ -1,0 +1,6 @@
+{
+  "name": "NOVA CAD AI",
+  "description": "Professional CAD. Reimagined with AI. Phase 1 foundation, authentication, project management, and responsive CAD workspace.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

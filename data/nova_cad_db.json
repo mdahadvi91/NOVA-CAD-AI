@@ -1,0 +1,405 @@
+{
+  "users": {
+    "usr_demo_nova": {
+      "id": "usr_demo_nova",
+      "email": "demo@novacad.ai",
+      "passwordHash": "375cf6006cbe1c04d58758794633f1ebf7f09009ebf056ca3175a8069a4912076e23c7563c19b6aa0ac2e11d45a5dc80654ce759ad515e8a73ea87810075b70f",
+      "salt": "69c84e99aa50208cad842dd3b9041724",
+      "name": "Architect Demo",
+      "role": "user",
+      "createdAt": "2026-09-09T19:52:01.977Z",
+      "updatedAt": "2026-09-09T19:52:01.978Z"
+    },
+    "usr_c950f241ab1291b9": {
+      "id": "usr_c950f241ab1291b9",
+      "email": "engineer_a_1788983789168@novacad.ai",
+      "passwordHash": "59d2e753ef6db1c3e9dd2bd1f0619d655f776931f44a40b54146b6c6fab02ad1d8d5845c339abda20aedbd8d12a381a0d8c7740903fddcb9f64ccc435133f367",
+      "salt": "8ce83c530cb99dee7da616807b38dfff",
+      "name": "Engineer A",
+      "role": "user",
+      "createdAt": "2026-09-09T19:56:29.301Z",
+      "updatedAt": "2026-09-09T19:56:29.301Z"
+    },
+    "usr_9287a884c1b95688": {
+      "id": "usr_9287a884c1b95688",
+      "email": "engineer_b_1788983789338@novacad.ai",
+      "passwordHash": "7f1bcc9ac9d59d051b1c2f85fab87873b1df1e949c59211f43dd42a859149227f2294bb593d68236bd29d543bd21a82b6154f43f6129086b59bc65f489c1db2b",
+      "salt": "80b290707a084562bd704dba9b318ed4",
+      "name": "Engineer B",
+      "role": "user",
+      "createdAt": "2026-09-09T19:56:29.343Z",
+      "updatedAt": "2026-09-09T19:56:29.343Z"
+    }
+  },
+  "projects": {
+    "prj_foundation_sample": {
+      "id": "prj_foundation_sample",
+      "ownerId": "usr_demo_nova",
+      "name": "Nova Architectural Prototype A-101",
+      "description": "Phase 1 baseline workspace floorplan layout and coordinate calibration.",
+      "units": "mm",
+      "status": "active",
+      "metadata": {
+        "gridSpacing": 20,
+        "snapTolerance": 10,
+        "precision": 2,
+        "defaultLayerId": "layer_0"
+      },
+      "createdAt": "2026-09-08T19:52:01.978Z",
+      "updatedAt": "2026-09-09T19:52:01.978Z",
+      "currentVersionId": "ver_sample_1",
+      "drawingData": {
+        "objects": [],
+        "layers": [
+          {
+            "id": "layer_0",
+            "name": "0 - General",
+            "color": "#00ffff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "layer_walls",
+            "name": "A-WALL (Walls)",
+            "color": "#ffffff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "layer_dims",
+            "name": "A-DIMS (Dimensions)",
+            "color": "#ffb020",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "viewState": {
+          "panX": 0,
+          "panY": 0,
+          "zoom": 1,
+          "gridVisible": true,
+          "gridSnap": true,
+          "gridSize": 20
+        },
+        "calibration": {
+          "originX": 0,
+          "originY": 0,
+          "scaleRefLength": 1000
+        }
+      }
+    },
+    "prj_616283d0bfb66f3f": {
+      "id": "prj_616283d0bfb66f3f",
+      "ownerId": "usr_c950f241ab1291b9",
+      "name": "Welcome - Drawing 1",
+      "description": "Default starter CAD workspace with calibrated grid and layers.",
+      "units": "mm",
+      "status": "active",
+      "metadata": {
+        "gridSpacing": 20,
+        "snapTolerance": 10,
+        "precision": 2
+      },
+      "createdAt": "2026-09-09T19:56:29.302Z",
+      "updatedAt": "2026-09-09T19:56:29.302Z",
+      "currentVersionId": "ver_a570738335722f97",
+      "drawingData": {
+        "objects": [],
+        "layers": [
+          {
+            "id": "layer_0",
+            "name": "0 - Standard",
+            "color": "#00e5ff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "layer_geom",
+            "name": "A-GEOM",
+            "color": "#ffffff",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "viewState": {
+          "panX": 0,
+          "panY": 0,
+          "zoom": 1,
+          "gridVisible": true,
+          "gridSnap": true,
+          "gridSize": 20
+        },
+        "calibration": {
+          "originX": 0,
+          "originY": 0,
+          "scaleRefLength": 1000
+        }
+      }
+    },
+    "prj_a5b7e6da5002d965": {
+      "id": "prj_a5b7e6da5002d965",
+      "ownerId": "usr_9287a884c1b95688",
+      "name": "Welcome - Drawing 1",
+      "description": "Default starter CAD workspace with calibrated grid and layers.",
+      "units": "mm",
+      "status": "active",
+      "metadata": {
+        "gridSpacing": 20,
+        "snapTolerance": 10,
+        "precision": 2
+      },
+      "createdAt": "2026-09-09T19:56:29.344Z",
+      "updatedAt": "2026-09-09T19:56:29.344Z",
+      "currentVersionId": "ver_38c5b26e6042c849",
+      "drawingData": {
+        "objects": [],
+        "layers": [
+          {
+            "id": "layer_0",
+            "name": "0 - Standard",
+            "color": "#00e5ff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "layer_geom",
+            "name": "A-GEOM",
+            "color": "#ffffff",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "viewState": {
+          "panX": 0,
+          "panY": 0,
+          "zoom": 1,
+          "gridVisible": true,
+          "gridSnap": true,
+          "gridSize": 20
+        },
+        "calibration": {
+          "originX": 0,
+          "originY": 0,
+          "scaleRefLength": 1000
+        }
+      }
+    },
+    "prj_297e57b98780e66f": {
+      "id": "prj_297e57b98780e66f",
+      "ownerId": "usr_c950f241ab1291b9",
+      "name": "Structural Foundation Grid (Copy)",
+      "description": "Grid calibration test",
+      "units": "m",
+      "status": "active",
+      "metadata": {
+        "gridSpacing": 1,
+        "snapTolerance": 10,
+        "precision": 2
+      },
+      "createdAt": "2026-09-09T19:56:29.384Z",
+      "updatedAt": "2026-09-09T19:56:29.384Z",
+      "currentVersionId": "ver_ffae48844b501aa9",
+      "drawingData": {
+        "objects": [],
+        "layers": [
+          {
+            "id": "l1",
+            "name": "Wall",
+            "color": "#fff",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "viewState": {
+          "panX": 50,
+          "panY": 100,
+          "zoom": 2.5,
+          "gridVisible": true,
+          "gridSnap": true,
+          "gridSize": 1
+        },
+        "calibration": {
+          "originX": 0,
+          "originY": 0,
+          "scaleRefLength": 10
+        }
+      }
+    }
+  },
+  "projectVersions": {
+    "prj_foundation_sample": [
+      {
+        "id": "ver_sample_1",
+        "projectId": "prj_foundation_sample",
+        "version": 1,
+        "createdAt": "2026-09-09T19:52:01.978Z",
+        "createdBy": "usr_demo_nova",
+        "description": "Initial Phase 1 Workspace Foundation Setup",
+        "drawingData": {
+          "objects": [],
+          "layers": [
+            {
+              "id": "layer_0",
+              "name": "0 - General",
+              "color": "#00ffff",
+              "visible": true,
+              "locked": false
+            },
+            {
+              "id": "layer_walls",
+              "name": "A-WALL (Walls)",
+              "color": "#ffffff",
+              "visible": true,
+              "locked": false
+            },
+            {
+              "id": "layer_dims",
+              "name": "A-DIMS (Dimensions)",
+              "color": "#ffb020",
+              "visible": true,
+              "locked": false
+            }
+          ],
+          "viewState": {
+            "panX": 0,
+            "panY": 0,
+            "zoom": 1,
+            "gridVisible": true,
+            "gridSnap": true,
+            "gridSize": 20
+          },
+          "calibration": {
+            "originX": 0,
+            "originY": 0,
+            "scaleRefLength": 1000
+          }
+        }
+      }
+    ],
+    "prj_616283d0bfb66f3f": [
+      {
+        "id": "ver_a570738335722f97",
+        "projectId": "prj_616283d0bfb66f3f",
+        "version": 1,
+        "createdAt": "2026-09-09T19:56:29.302Z",
+        "createdBy": "usr_c950f241ab1291b9",
+        "description": "Initial Project Creation",
+        "drawingData": {
+          "objects": [],
+          "layers": [
+            {
+              "id": "layer_0",
+              "name": "0 - Standard",
+              "color": "#00e5ff",
+              "visible": true,
+              "locked": false
+            },
+            {
+              "id": "layer_geom",
+              "name": "A-GEOM",
+              "color": "#ffffff",
+              "visible": true,
+              "locked": false
+            }
+          ],
+          "viewState": {
+            "panX": 0,
+            "panY": 0,
+            "zoom": 1,
+            "gridVisible": true,
+            "gridSnap": true,
+            "gridSize": 20
+          },
+          "calibration": {
+            "originX": 0,
+            "originY": 0,
+            "scaleRefLength": 1000
+          }
+        }
+      }
+    ],
+    "prj_a5b7e6da5002d965": [
+      {
+        "id": "ver_38c5b26e6042c849",
+        "projectId": "prj_a5b7e6da5002d965",
+        "version": 1,
+        "createdAt": "2026-09-09T19:56:29.344Z",
+        "createdBy": "usr_9287a884c1b95688",
+        "description": "Initial Project Creation",
+        "drawingData": {
+          "objects": [],
+          "layers": [
+            {
+              "id": "layer_0",
+              "name": "0 - Standard",
+              "color": "#00e5ff",
+              "visible": true,
+              "locked": false
+            },
+            {
+              "id": "layer_geom",
+              "name": "A-GEOM",
+              "color": "#ffffff",
+              "visible": true,
+              "locked": false
+            }
+          ],
+          "viewState": {
+            "panX": 0,
+            "panY": 0,
+            "zoom": 1,
+            "gridVisible": true,
+            "gridSnap": true,
+            "gridSize": 20
+          },
+          "calibration": {
+            "originX": 0,
+            "originY": 0,
+            "scaleRefLength": 1000
+          }
+        }
+      }
+    ],
+    "prj_297e57b98780e66f": [
+      {
+        "id": "ver_ffae48844b501aa9",
+        "projectId": "prj_297e57b98780e66f",
+        "version": 1,
+        "createdAt": "2026-09-09T19:56:29.384Z",
+        "createdBy": "usr_c950f241ab1291b9",
+        "description": "Duplicated from Structural Foundation Grid",
+        "drawingData": {
+          "objects": [],
+          "layers": [
+            {
+              "id": "l1",
+              "name": "Wall",
+              "color": "#fff",
+              "visible": true,
+              "locked": false
+            }
+          ],
+          "viewState": {
+            "panX": 50,
+            "panY": 100,
+            "zoom": 2.5,
+            "gridVisible": true,
+            "gridSnap": true,
+            "gridSize": 1
+          },
+          "calibration": {
+            "originX": 0,
+            "originY": 0,
+            "scaleRefLength": 10
+          }
+        }
+      }
+    ]
+  },
+  "drawingObjects": {},
+  "layers": {},
+  "aiRequests": {},
+  "aiUsage": {},
+  "exportJobs": {},
+  "subscriptions": {}
+}
