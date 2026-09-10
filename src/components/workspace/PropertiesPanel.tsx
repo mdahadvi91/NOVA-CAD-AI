@@ -13,6 +13,7 @@ import {
   Calendar,
   Check,
   Plus,
+  RotateCcw,
 } from 'lucide-react';
 import { Project, ProjectVersion, UnitType, ViewState, Layer } from '../../types';
 
@@ -27,6 +28,7 @@ interface PropertiesPanelProps {
     gridSpacing?: number;
   }) => void;
   onUpdateLayers: (layers: Layer[]) => void;
+  onRestoreVersion?: (versionId: string) => Promise<void> | void;
   isOpen: boolean;
   onToggleOpen: () => void;
 }
@@ -37,12 +39,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
   versions,
   onUpdateProjectMeta,
   onUpdateLayers,
+  onRestoreVersion,
   isOpen,
   onToggleOpen,
 }) => {
   const [activeTab, setActiveTab] = useState<'properties' | 'layers' | 'versions'>('properties');
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState(project.name);
+  const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
 
   const layers = project.drawingData?.layers || [];
 
@@ -316,29 +320,64 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
               </span>
 
               <div className="space-y-2">
-                {versions.map((ver) => (
-                  <div
-                    key={ver.id}
-                    className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 space-y-1"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono font-bold text-cyan-400 text-xs">
-                        v{ver.version}.0
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        {new Date(ver.createdAt).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
+                {versions.map((ver) => {
+                  const isCurrent = ver.id === project.currentVersionId;
+                  const isRestoring = restoringVersionId === ver.id;
+
+                  return (
+                    <div
+                      key={ver.id}
+                      className={`p-2.5 rounded-lg bg-slate-950/80 border space-y-1.5 transition-colors ${
+                        isCurrent ? 'border-cyan-500/50 bg-cyan-950/20' : 'border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-bold text-cyan-400 text-xs">
+                            v{ver.version}.0
+                          </span>
+                          {isCurrent && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase tracking-wider bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(ver.createdAt).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300">{ver.description || 'Snapshot'}</p>
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-900">
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <Calendar size={10} />
+                          {new Date(ver.createdAt).toLocaleDateString()}
+                        </div>
+                        {!isCurrent && onRestoreVersion && (
+                          <button
+                            type="button"
+                            disabled={isRestoring}
+                            onClick={async () => {
+                              try {
+                                setRestoringVersionId(ver.id);
+                                await onRestoreVersion(ver.id);
+                              } finally {
+                                setRestoringVersionId(null);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+                            title={`Restore drawing state to v${ver.version}.0`}
+                          >
+                            <RotateCcw size={10} className={isRestoring ? 'animate-spin' : ''} />
+                            <span>{isRestoring ? 'Restoring...' : 'Restore'}</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-slate-300">{ver.description || 'Snapshot'}</p>
-                    <div className="text-[10px] text-slate-400 flex items-center gap-1 pt-1">
-                      <Calendar size={10} />
-                      {new Date(ver.createdAt).toLocaleDateString()}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

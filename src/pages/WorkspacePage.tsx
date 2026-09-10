@@ -165,6 +165,33 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
     [project, viewState, addLog]
   );
 
+  // Restore Project Version Implementation
+  const handleRestoreVersion = useCallback(
+    async (versionId: string) => {
+      if (!project) return;
+      try {
+        const res = await api.restoreProjectVersion(project.id, versionId);
+        setProject(res.project);
+        setVersions((prev) => [res.version, ...prev]);
+        if (res.project.drawingData?.viewState) {
+          setViewState(res.project.drawingData.viewState);
+        }
+        setSaveStatus('saved');
+        setLastSavedAt(res.project.updatedAt);
+        setHasUnsavedChanges(false);
+        addLog(
+          `Restored workspace state to Version ${res.version.version}.0 (from historical snapshot).`,
+          'success'
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Restore failed';
+        alert(`Failed to restore version: ${msg}`);
+        addLog(`Restore error: ${msg}`, 'error');
+      }
+    },
+    [project, addLog]
+  );
+
   // Autosave trigger: if unsaved changes exist, debounce save after 25 seconds
   useEffect(() => {
     if (hasUnsavedChanges) {
@@ -525,6 +552,7 @@ export const WorkspacePage: React.FC<WorkspacePageProps> = ({
           versions={versions}
           onUpdateProjectMeta={handleUpdateProjectMeta}
           onUpdateLayers={handleUpdateLayers}
+          onRestoreVersion={handleRestoreVersion}
           isOpen={isPropertiesOpen}
           onToggleOpen={() => setIsPropertiesOpen(!isPropertiesOpen)}
         />
