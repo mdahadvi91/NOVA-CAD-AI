@@ -4,7 +4,6 @@ import { db } from '../db.js';
 import {
   hashPassword,
   verifyPassword,
-  createToken,
   requireAuth,
   AuthenticatedRequest,
 } from '../auth.js';
@@ -17,6 +16,8 @@ import {
   recordFailedLogin,
   recordSuccessfulLogin,
 } from '../middleware/rateLimit.js';
+import { mailer } from '../services/mailer.js';
+import { validateAndGetConfig } from '../config.js';
 
 const router = Router();
 
@@ -76,19 +77,13 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
     // 6. Cryptographic Password Hashing with Argon2id
     const { hash, salt } = await hashPassword(password);
 
-    // 7. Generate Secure Email Verification Token (24h validity)
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-
-    // 8. Atomic Registration Transaction (User + Calibrated Starter Project)
+    // 7. Atomic Registration Transaction (User + Calibrated Starter Project)
     const { user } = await db.registerUserAtomic(
       {
         email: normalizedEmail,
         name: name.trim(),
         passwordHash: hash,
         salt,
-        verificationToken,
-        verificationTokenExpires,
       },
       {
         name: 'Welcome - Drawing 1',
@@ -97,15 +92,32 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
       }
     );
 
-    // 8. Generate Session Token & Set HttpOnly Cookie
-    const token = createToken(user.id, user.email);
-    res.cookie('session_token', token, COOKIE_OPTIONS);
+    // 8. Generate Email Verification Token in DB and Dispatch Email
+    const rawVerificationToken = crypto.randomBytes(32).toString('hex');
+    await db.createEmailVerificationToken(user.id, rawVerificationToken);
 
-    // Provide testing helper in preview / development environments
-    console.log(`[AUTH] User registered: ${user.email} | Verification Token: ${verificationToken}`);
+    try {
+      await mailer.sendVerificationEmail(user.email, rawVerificationToken);
+    } catch (mailErr) {
+      const config = validateAndGetConfig();
+      if (config.isProduction) {
+        console.error('Failed to send verification email in production:', mailErr);
+      }
+    }
+
+    // 9. Create PostgreSQL Session & Set HttpOnly Cookie
+    const session = await db.createSession(user.id);
+    res.cookie('session_id', session.id, COOKIE_OPTIONS);
+    res.cookie('session_token', session.id, COOKIE_OPTIONS); // Backward compatibility alias
+
+    const config = validateAndGetConfig();
+    if (!config.isProduction) {
+      console.log(`[AUTH-DEV] User registered: ${user.email} (Email verification queued)`);
+    }
 
     res.status(201).json({
-      token,
+      sessionId: session.id,
+      token: session.id,
       user: {
         id: user.id,
         email: user.email,
@@ -117,7 +129,6 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
         emailVerified: user.emailVerified,
         createdAt: user.createdAt,
       },
-      devVerificationToken: verificationToken,
     });
   } catch (err) {
     console.error('Registration error:', err);
@@ -125,7 +136,7 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
   }
 });
 
-// --- LOGIN WITH BRUTE-FORCE THROTTLING ---
+// --- LOGIN WITH BRUTE-FORCE THROTTLING & POSTGRESQL SESSIONS ---
 router.post('/login', async (req, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -164,7 +175,7 @@ router.post('/login', async (req, res: Response) => {
     }
 
     // 3. Argon2id Password Verification
-    const { isValid, needsRehash } = await verifyPassword(password, user.passwordHash, user.salt);
+    const { isValid } = await verifyPassword(password, user.passwordHash, user.salt);
     if (!isValid) {
       const result = recordFailedLogin(req, normalizedEmail);
       res.status(401).json({
@@ -180,26 +191,19 @@ router.post('/login', async (req, res: Response) => {
     // 4. Success: Clear Throttling Counter
     recordSuccessfulLogin(req, normalizedEmail);
 
-    // 5. Automatic Password Rehash & Upgrade if needed (e.g. legacy demo hash)
-    if (needsRehash) {
-      const { hash: newHash } = await hashPassword(password);
-      await db.updateUser(user.id, {
-        passwordHash: newHash,
-        salt: 'argon2id_embedded',
-        lastLoginAt: new Date().toISOString(),
-      });
-    } else {
-      await db.updateUser(user.id, {
-        lastLoginAt: new Date().toISOString(),
-      });
-    }
+    // 5. Update last login timestamp
+    await db.updateUser(user.id, {
+      lastLoginAt: new Date().toISOString(),
+    });
 
-    // 6. Generate Session Token & Set HttpOnly Cookie
-    const token = createToken(user.id, user.email);
-    res.cookie('session_token', token, COOKIE_OPTIONS);
+    // 6. Create PostgreSQL Session & Set HttpOnly Cookie
+    const session = await db.createSession(user.id);
+    res.cookie('session_id', session.id, COOKIE_OPTIONS);
+    res.cookie('session_token', session.id, COOKIE_OPTIONS); // Backward compatibility alias
 
     res.json({
-      token,
+      sessionId: session.id,
+      token: session.id,
       user: {
         id: user.id,
         email: user.email,
@@ -240,40 +244,29 @@ router.get('/me', requireAuth, async (req: AuthenticatedRequest, res: Response) 
 // --- EMAIL VERIFICATION: VERIFY TOKEN ---
 router.post('/verify-email', emailVerificationRateLimiter, async (req, res: Response) => {
   try {
-    const { token } = req.body;
+    const token = req.body.token || req.query.token;
     if (!token || typeof token !== 'string') {
       res.status(400).json({ error: 'Verification token is required.' });
       return;
     }
 
-    const user = await db.findUserByVerificationToken(token.trim());
-    if (!user) {
-      res.status(400).json({ error: 'Invalid or expired verification token.' });
+    const result = await db.verifyEmailToken(token.trim());
+    if (!result.success) {
+      res.status(400).json({ error: result.error || 'Invalid or expired verification token.' });
       return;
     }
-
-    if (user.verificationTokenExpires && new Date(user.verificationTokenExpires).getTime() < Date.now()) {
-      res.status(400).json({ error: 'Verification token has expired. Please request a new verification email.' });
-      return;
-    }
-
-    const updatedUser = await db.updateUser(user.id, {
-      emailVerified: true,
-      verificationToken: undefined,
-      verificationTokenExpires: undefined,
-    });
 
     res.json({
-      message: 'Email verified successfully! All cloud export features are now unlocked.',
-      user: updatedUser
+      message: 'Email verified successfully! All cloud export and workspace features are unlocked.',
+      user: result.user
         ? {
-            id: updatedUser.id,
-            email: updatedUser.email,
-            name: updatedUser.name,
-            role: updatedUser.role,
-            tier: updatedUser.tier,
-            subscriptionStatus: updatedUser.subscriptionStatus,
-            emailVerified: updatedUser.emailVerified,
+            id: result.user.id,
+            email: result.user.email,
+            name: result.user.name,
+            role: result.user.role,
+            tier: result.user.tier,
+            subscriptionStatus: result.user.subscriptionStatus,
+            emailVerified: result.user.emailVerified,
           }
         : null,
     });
@@ -292,21 +285,23 @@ router.post('/resend-verification', emailVerificationRateLimiter, async (req, re
     if (email && typeof email === 'string') {
       targetUser = await db.findUserByEmail(email.trim().toLowerCase());
     } else {
-      // Check auth header if available
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7);
-        // Note: verifyToken is synchronous and safe
-        const { verifyToken } = await import('../auth.js');
-        const payload = verifyToken(token);
-        if (payload) {
-          targetUser = await db.findUserById(payload.userId);
+      const sessionId =
+        req.cookies?.['session_id'] ||
+        (req.headers['x-session-id'] as string) ||
+        (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
+          ? req.headers.authorization.substring(7).trim()
+          : undefined);
+
+      if (sessionId) {
+        const sessionData = await db.findSessionById(sessionId);
+        if (sessionData) {
+          targetUser = sessionData.user;
         }
       }
     }
 
     if (!targetUser) {
-      // Return success to avoid email enumeration
+      // Protection against email enumeration
       res.json({ message: 'If an account exists with that address, a verification link has been sent.' });
       return;
     }
@@ -316,19 +311,20 @@ router.post('/resend-verification', emailVerificationRateLimiter, async (req, re
       return;
     }
 
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    await db.createEmailVerificationToken(targetUser.id, rawToken);
 
-    await db.updateUser(targetUser.id, {
-      verificationToken,
-      verificationTokenExpires,
-    });
-
-    console.log(`[AUTH] Resent Verification Token for ${targetUser.email}: ${verificationToken}`);
+    try {
+      await mailer.sendVerificationEmail(targetUser.email, rawToken);
+    } catch (mailErr) {
+      const config = validateAndGetConfig();
+      if (config.isProduction) {
+        console.error('Failed to send verification email in production:', mailErr);
+      }
+    }
 
     res.json({
       message: 'A fresh verification token has been generated and dispatched.',
-      devVerificationToken: verificationToken,
     });
   } catch (err) {
     console.error('Resend verification error:', err);
@@ -336,13 +332,11 @@ router.post('/resend-verification', emailVerificationRateLimiter, async (req, re
   }
 });
 
-// --- DEV QUICK VERIFY HELPER (Allows one-click verification for current user in preview) ---
+// --- DEV QUICK VERIFY HELPER (Allows instant verification in dev mode) ---
 router.post('/quick-verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const user = req.user!;
   const updatedUser = await db.updateUser(user.id, {
     emailVerified: true,
-    verificationToken: undefined,
-    verificationTokenExpires: undefined,
   });
 
   res.json({
@@ -373,25 +367,23 @@ router.post('/forgot-password', passwordResetRateLimiter, async (req, res: Respo
     const normalizedEmail = email.trim().toLowerCase();
     const user = await db.findUserByEmail(normalizedEmail);
 
-    let devResetToken: string | undefined = undefined;
-
     if (user) {
-      const resetPasswordToken = crypto.randomBytes(32).toString('hex');
-      const resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour validity
+      const rawResetToken = crypto.randomBytes(32).toString('hex');
+      await db.createPasswordResetToken(user.id, rawResetToken);
 
-      await db.updateUser(user.id, {
-        resetPasswordToken,
-        resetPasswordExpires,
-      });
-
-      devResetToken = resetPasswordToken;
-      console.log(`[AUTH] Password reset requested for ${user.email} | Reset Token: ${resetPasswordToken}`);
+      try {
+        await mailer.sendPasswordResetEmail(user.email, rawResetToken);
+      } catch (mailErr) {
+        const config = validateAndGetConfig();
+        if (config.isProduction) {
+          console.error('Failed to send password reset email in production:', mailErr);
+        }
+      }
     }
 
     // Generic response protects against account enumeration
     res.json({
       message: 'If an account exists with that email address, password reset instructions have been sent.',
-      devResetToken, // Shared in development/preview for seamless testing
     });
   } catch (err) {
     console.error('Forgot password error:', err);
@@ -399,7 +391,7 @@ router.post('/forgot-password', passwordResetRateLimiter, async (req, res: Respo
   }
 });
 
-// --- RESET PASSWORD: APPLY NEW PASSWORD WITH ARGON2ID ---
+// --- RESET PASSWORD: APPLY NEW PASSWORD WITH ARGON2ID & SESSION REVOCATION ---
 router.post('/reset-password', passwordResetRateLimiter, async (req, res: Response) => {
   try {
     const { token, newPassword } = req.body;
@@ -409,19 +401,8 @@ router.post('/reset-password', passwordResetRateLimiter, async (req, res: Respon
       return;
     }
 
-    const user = await db.findUserByResetToken(token.trim());
-    if (!user) {
-      res.status(400).json({ error: 'Invalid or expired password reset link.' });
-      return;
-    }
-
-    if (user.resetPasswordExpires && new Date(user.resetPasswordExpires).getTime() < Date.now()) {
-      res.status(400).json({ error: 'Password reset token has expired. Please request a new one.' });
-      return;
-    }
-
     // Strict validation of new password
-    const validation = validatePassword(newPassword, { email: user.email, name: user.name });
+    const validation = validatePassword(newPassword);
     if (!validation.isValid) {
       res.status(400).json({
         error: validation.feedback[0] || 'Password does not meet enterprise security requirements.',
@@ -433,16 +414,19 @@ router.post('/reset-password', passwordResetRateLimiter, async (req, res: Respon
     // Hash new password using Argon2id
     const { hash } = await hashPassword(newPassword);
 
-    await db.updateUser(user.id, {
-      passwordHash: hash,
-      salt: 'argon2id_embedded',
-      resetPasswordToken: undefined,
-      resetPasswordExpires: undefined,
-      passwordChangedAt: new Date().toISOString(),
-    });
+    // Atomically reset password, mark token used, and delete all sessions
+    const result = await db.resetPasswordWithToken(token.trim(), hash);
+    if (!result.success) {
+      res.status(400).json({ error: result.error || 'Invalid or expired password reset link.' });
+      return;
+    }
+
+    // Clear session cookie if any
+    res.clearCookie('session_id', { path: '/' });
+    res.clearCookie('session_token', { path: '/' });
 
     res.json({
-      message: 'Password successfully updated. You may now sign in with your new credentials.',
+      message: 'Password successfully updated. All active sessions have been invalidated. Please sign in with your new password.',
     });
   } catch (err) {
     console.error('Reset password error:', err);
@@ -468,8 +452,19 @@ router.get('/subscription-status', requireAuth, async (req: AuthenticatedRequest
   });
 });
 
-// --- LOGOUT ---
-router.post('/logout', (_req, res: Response) => {
+// --- LOGOUT: COOKIE CLEAR + DATABASE SESSION INVALIDATE ---
+router.post('/logout', async (req: AuthenticatedRequest, res: Response) => {
+  const sessionId =
+    req.sessionId ||
+    req.cookies?.['session_id'] ||
+    req.cookies?.['session_token'] ||
+    (req.headers['x-session-id'] as string);
+
+  if (sessionId) {
+    await db.deleteSession(sessionId).catch(() => {});
+  }
+
+  res.clearCookie('session_id', { path: '/' });
   res.clearCookie('session_token', { path: '/' });
   res.json({ message: 'Signed out securely.' });
 });

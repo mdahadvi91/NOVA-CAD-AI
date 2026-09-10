@@ -11,20 +11,25 @@ export interface AppConfig {
 
 let cachedConfig: AppConfig | null = null;
 
+export function clearConfigCache(): void {
+  cachedConfig = null;
+}
+
 /**
  * Validates the runtime environment on server boot.
  * Prevents silent startup in production if critical secrets or database configurations are missing.
  */
-export function validateAndGetConfig(): AppConfig {
-  if (cachedConfig) {
+export function validateAndGetConfig(customEnv?: Record<string, string | undefined>): AppConfig {
+  if (cachedConfig && !customEnv) {
     return cachedConfig;
   }
 
-  const nodeEnv = process.env.NODE_ENV || 'development';
+  const env = customEnv || process.env;
+  const nodeEnv = env.NODE_ENV || 'development';
   const isProduction = nodeEnv === 'production';
-  const appUrl = process.env.APP_URL || 'http://localhost:3000';
-  let appSecret = process.env.APP_SECRET;
-  let databaseUrl = process.env.DATABASE_URL;
+  const appUrl = env.APP_URL || 'http://localhost:3000';
+  let appSecret = env.APP_SECRET;
+  let databaseUrl = env.DATABASE_URL;
 
   if (isProduction) {
     const errors: string[] = [];
@@ -41,8 +46,9 @@ export function validateAndGetConfig(): AppConfig {
     }
 
     if (!databaseUrl || databaseUrl.trim().length === 0) {
-      // In production, require DATABASE_URL unless local managed postgres is explicitly configured
-      databaseUrl = 'postgresql://postgres@127.0.0.1:5432/novacad';
+      errors.push('CRITICAL: DATABASE_URL environment variable is mandatory in production.');
+    } else if (databaseUrl.includes('localhost') || databaseUrl.includes('127.0.0.1')) {
+      errors.push('CRITICAL: Localhost database fallback is strictly forbidden in production.');
     }
 
     if (errors.length > 0) {
@@ -69,13 +75,17 @@ export function validateAndGetConfig(): AppConfig {
     }
   }
 
-  cachedConfig = {
+  const resolvedConfig: AppConfig = {
     isProduction,
     appSecret: appSecret!,
     appUrl,
-    databaseUrl,
+    databaseUrl: databaseUrl!,
     nodeEnv,
   };
 
-  return cachedConfig;
+  if (!customEnv) {
+    cachedConfig = resolvedConfig;
+  }
+
+  return resolvedConfig;
 }

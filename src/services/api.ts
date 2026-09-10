@@ -205,6 +205,12 @@ class ApiService {
     return this.request<{ versions: ProjectVersion[] }>(`/api/projects/${id}/versions`);
   }
 
+  public async restoreProjectVersion(id: string, versionId: string): Promise<{ message: string; project: Project; version: ProjectVersion }> {
+    return this.request<{ message: string; project: Project; version: ProjectVersion }>(`/api/projects/${id}/restore/${versionId}`, {
+      method: 'POST',
+    });
+  }
+
   // --- Payment & Billing APIs ---
   public async getPaymentPlans(): Promise<{
     plans: {

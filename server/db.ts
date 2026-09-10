@@ -114,6 +114,34 @@ export interface AIUsageLog {
   createdAt: string;
 }
 
+export interface Session {
+  id: string;
+  userId: string;
+  expiresAt: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
+export interface EmailVerificationToken {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  used: boolean;
+  createdAt: string;
+  usedAt?: string;
+}
+
+export interface PasswordResetToken {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  used: boolean;
+  createdAt: string;
+  usedAt?: string;
+}
+
 // Row Mappers to convert PostgreSQL snake_case to TypeScript camelCase
 function mapUserRow(row: Record<string, unknown>): User {
   return {
@@ -280,10 +308,44 @@ export class Database {
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS sessions (
+        id VARCHAR(128) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS email_verification_tokens (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(128) UNIQUE NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        used_at TIMESTAMPTZ
+      );
+
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(128) UNIQUE NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        used_at TIMESTAMPTZ
+      );
+
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(LOWER(email));
       CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_id);
       CREATE INDEX IF NOT EXISTS idx_project_versions_project ON project_versions(project_id);
       CREATE INDEX IF NOT EXISTS idx_payments_user ON payment_transactions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_email_tokens_hash ON email_verification_tokens(token_hash);
+      CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON email_verification_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_password_tokens_hash ON password_reset_tokens(token_hash);
+      CREATE INDEX IF NOT EXISTS idx_password_tokens_user ON password_reset_tokens(user_id);
     `);
 
     // Clean up any historical demo accounts if present
@@ -572,6 +634,179 @@ export class Database {
     return mapUserRow(res.rows[0]);
   }
 
+  // --- SESSION METHODS ---
+  public async createSession(userId: string, ttlMs: number = 7 * 24 * 60 * 60 * 1000): Promise<Session> {
+    await this.init();
+    const sessionId = `ses_${crypto.randomBytes(32).toString('hex')}`;
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    const now = new Date().toISOString();
+
+    const res = await this.getPool().query(
+      `INSERT INTO sessions (id, user_id, expires_at, created_at, last_used_at)
+       VALUES ($1, $2, $3, $4, $4)
+       RETURNING *`,
+      [sessionId, userId, expiresAt, now]
+    );
+
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      userId: row.user_id,
+      expiresAt: new Date(row.expires_at).toISOString(),
+      createdAt: new Date(row.created_at).toISOString(),
+      lastUsedAt: new Date(row.last_used_at).toISOString(),
+    };
+  }
+
+  public async findSessionById(sessionId: string): Promise<{ session: Session; user: User } | null> {
+    await this.init();
+    const res = await this.getPool().query(
+      `SELECT s.id as session_id, s.user_id, s.expires_at, s.created_at as session_created_at, s.last_used_at,
+              u.*
+       FROM sessions s
+       JOIN users u ON s.user_id = u.id
+       WHERE s.id = $1 AND s.expires_at > NOW()`,
+      [sessionId]
+    );
+
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+
+    // Update last_used_at asynchronously
+    this.getPool().query('UPDATE sessions SET last_used_at = NOW() WHERE id = $1', [sessionId]).catch(() => {});
+
+    return {
+      session: {
+        id: row.session_id,
+        userId: row.user_id,
+        expiresAt: new Date(row.expires_at).toISOString(),
+        createdAt: new Date(row.session_created_at).toISOString(),
+        lastUsedAt: new Date(row.last_used_at).toISOString(),
+      },
+      user: mapUserRow(row),
+    };
+  }
+
+  public async deleteSession(sessionId: string): Promise<boolean> {
+    await this.init();
+    const res = await this.getPool().query('DELETE FROM sessions WHERE id = $1', [sessionId]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  public async deleteAllSessionsForUser(userId: string): Promise<void> {
+    await this.init();
+    await this.getPool().query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+  }
+
+  // --- EMAIL VERIFICATION TOKEN METHODS ---
+  public async createEmailVerificationToken(userId: string, rawToken: string, ttlMs: number = 24 * 60 * 60 * 1000): Promise<void> {
+    await this.init();
+    const id = `evt_${crypto.randomBytes(16).toString('hex')}`;
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+
+    await this.getPool().query(
+      `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, used, created_at)
+       VALUES ($1, $2, $3, $4, FALSE, NOW())`,
+      [id, userId, tokenHash, expiresAt]
+    );
+  }
+
+  public async verifyEmailToken(rawToken: string): Promise<{ success: boolean; user?: User; error?: string }> {
+    await this.init();
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    return this.runTransaction(async (client) => {
+      const res = await client.query(
+        `SELECT * FROM email_verification_tokens WHERE token_hash = $1 FOR UPDATE`,
+        [tokenHash]
+      );
+
+      if (res.rows.length === 0) {
+        return { success: false, error: 'Invalid email verification token.' };
+      }
+
+      const row = res.rows[0];
+      if (row.used) {
+        return { success: false, error: 'This verification token has already been used.' };
+      }
+
+      if (new Date(row.expires_at).getTime() < Date.now()) {
+        return { success: false, error: 'Verification token has expired. Please request a new verification link.' };
+      }
+
+      // Mark used
+      await client.query(
+        `UPDATE email_verification_tokens SET used = TRUE, used_at = NOW() WHERE id = $1`,
+        [row.id]
+      );
+
+      // Mark user email verified
+      const userRes = await client.query(
+        `UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1 RETURNING *`,
+        [row.user_id]
+      );
+
+      return { success: true, user: mapUserRow(userRes.rows[0]) };
+    });
+  }
+
+  // --- PASSWORD RESET TOKEN METHODS ---
+  public async createPasswordResetToken(userId: string, rawToken: string, ttlMs: number = 60 * 60 * 1000): Promise<void> {
+    await this.init();
+    const id = `prt_${crypto.randomBytes(16).toString('hex')}`;
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+
+    await this.getPool().query(
+      `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, used, created_at)
+       VALUES ($1, $2, $3, $4, FALSE, NOW())`,
+      [id, userId, tokenHash, expiresAt]
+    );
+  }
+
+  public async resetPasswordWithToken(rawToken: string, newPasswordHash: string): Promise<{ success: boolean; userId?: string; error?: string }> {
+    await this.init();
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    return this.runTransaction(async (client) => {
+      const res = await client.query(
+        `SELECT * FROM password_reset_tokens WHERE token_hash = $1 FOR UPDATE`,
+        [tokenHash]
+      );
+
+      if (res.rows.length === 0) {
+        return { success: false, error: 'Invalid or expired password reset link.' };
+      }
+
+      const row = res.rows[0];
+      if (row.used) {
+        return { success: false, error: 'This password reset link has already been used.' };
+      }
+
+      if (new Date(row.expires_at).getTime() < Date.now()) {
+        return { success: false, error: 'Password reset link has expired. Please request a new one.' };
+      }
+
+      // Mark token as used
+      await client.query(
+        `UPDATE password_reset_tokens SET used = TRUE, used_at = NOW() WHERE id = $1`,
+        [row.id]
+      );
+
+      // Update password
+      await client.query(
+        `UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2`,
+        [newPasswordHash, row.user_id]
+      );
+
+      // Invalidate all existing sessions for this user!
+      await client.query('DELETE FROM sessions WHERE user_id = $1', [row.user_id]);
+
+      return { success: true, userId: row.user_id };
+    });
+  }
+
   // --- PROJECT METHODS ---
   public async getProjectsForUser(userId: string): Promise<Project[]> {
     await this.init();
@@ -817,6 +1052,59 @@ export class Database {
       [projectId]
     );
     return res.rows.map(mapProjectVersionRow);
+  }
+
+  public async restoreProjectVersion(
+    projectId: string,
+    versionId: string,
+    userId: string
+  ): Promise<{ project: Project; version: ProjectVersion } | null> {
+    return this.runTransaction(async (client) => {
+      const versionRes = await client.query(
+        'SELECT * FROM project_versions WHERE id = $1 AND project_id = $2',
+        [versionId, projectId]
+      );
+      if (versionRes.rows.length === 0) return null;
+      const targetVersion = mapProjectVersionRow(versionRes.rows[0]);
+
+      // Create new version marking restoration
+      const countRes = await client.query(
+        'SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM project_versions WHERE project_id = $1',
+        [projectId]
+      );
+      const nextVersion = Number(countRes.rows[0].next_version || 1);
+      const newVersionId = `ver_${crypto.randomBytes(8).toString('hex')}`;
+      const now = new Date().toISOString();
+      const description = `Restored from version ${targetVersion.version}`;
+
+      await client.query(
+        `INSERT INTO project_versions (
+          id, project_id, version, created_by, description, drawing_data, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [newVersionId, projectId, nextVersion, userId, description, JSON.stringify(targetVersion.drawingData), now]
+      );
+
+      const updatedProjectRes = await client.query(
+        `UPDATE projects
+         SET drawing_data = $1, current_version_id = $2, updated_at = $3
+         WHERE id = $4
+         RETURNING *`,
+        [JSON.stringify(targetVersion.drawingData), newVersionId, now, projectId]
+      );
+
+      return {
+        project: mapProjectRow(updatedProjectRes.rows[0]),
+        version: {
+          id: newVersionId,
+          projectId,
+          version: nextVersion,
+          createdBy: userId,
+          description,
+          drawingData: targetVersion.drawingData,
+          createdAt: now,
+        },
+      };
+    });
   }
 
   // --- PAYMENT & STRIPE TRANSACTION METHODS ---

@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { db, UnitType } from '../db.js';
 import { requireAuth, AuthenticatedRequest } from '../auth.js';
+import { validateDrawingData } from '../validation/drawingValidation.js';
 
 const router = Router();
 
@@ -72,7 +73,7 @@ router.get('/:id', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// PATCH /api/projects/:id - update project details (name, description, units, metadata)
+// PATCH /api/projects/:id - update project details (name, description, units, metadata, drawingData)
 router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
@@ -90,12 +91,26 @@ router.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
+    // Defensive DrawingData validation
+    let validatedDrawing = undefined;
+    if (drawingData !== undefined) {
+      const validation = validateDrawingData(drawingData);
+      if (!validation.isValid) {
+        res.status(400).json({
+          error: 'Invalid drawingData structure.',
+          details: validation.errors,
+        });
+        return;
+      }
+      validatedDrawing = validation.data;
+    }
+
     const updated = await db.updateProject(id, {
       name,
       description,
       units,
       metadata,
-      drawingData,
+      drawingData: validatedDrawing,
     });
 
     res.json({ project: updated });
@@ -167,6 +182,16 @@ router.post('/:id/save', async (req: AuthenticatedRequest, res: Response) => {
       return;
     }
 
+    // Defensive DrawingData validation
+    const validation = validateDrawingData(drawingData);
+    if (!validation.isValid) {
+      res.status(400).json({
+        error: 'Invalid drawingData structure.',
+        details: validation.errors,
+      });
+      return;
+    }
+
     const existing = await db.getProjectById(id);
     if (!existing) {
       res.status(404).json({ error: 'Project not found.' });
@@ -181,7 +206,7 @@ router.post('/:id/save', async (req: AuthenticatedRequest, res: Response) => {
     const result = await db.saveProjectVersion(
       id,
       userId,
-      drawingData,
+      validation.data!,
       description || 'Explicit save'
     );
 
@@ -218,6 +243,40 @@ router.get('/:id/versions', async (req: AuthenticatedRequest, res: Response) => 
   } catch (err) {
     console.error('Error fetching project versions:', err);
     res.status(500).json({ error: 'Failed to retrieve versions.' });
+  }
+});
+
+// POST /api/projects/:id/restore/:versionId - restore project to previous version
+router.post('/:id/restore/:versionId', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { id, versionId } = req.params;
+
+    const existing = await db.getProjectById(id);
+    if (!existing) {
+      res.status(404).json({ error: 'Project not found.' });
+      return;
+    }
+
+    if (existing.ownerId !== userId) {
+      res.status(403).json({ error: 'Access denied. You do not have permission to restore this project.' });
+      return;
+    }
+
+    const result = await db.restoreProjectVersion(id, versionId, userId);
+    if (!result) {
+      res.status(404).json({ error: 'Target version not found for this project.' });
+      return;
+    }
+
+    res.json({
+      message: `Project successfully restored to version ${result.version.version}.`,
+      project: result.project,
+      version: result.version,
+    });
+  } catch (err) {
+    console.error('Error restoring project version:', err);
+    res.status(500).json({ error: 'Failed to restore project version.' });
   }
 });
 

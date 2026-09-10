@@ -16,6 +16,7 @@ export interface TokenPayload {
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
+  sessionId?: string;
 }
 
 /**
@@ -23,60 +24,27 @@ export interface AuthenticatedRequest extends Request {
  * Memory: 64MB (65536 KB), Time: 3 passes, Parallelism: 4 threads
  */
 export async function hashPassword(password: string): Promise<{ hash: string; salt: string }> {
-  try {
-    const hash = await argon2.hash(password, {
-      type: argon2.argon2id,
-      memoryCost: 65536,
-      timeCost: 3,
-      parallelism: 4,
-    });
-    // Argon2 hashes embed the salt in the encoded string ($argon2id$v=19$m=65536,t=3,p=4$...)
-    return { hash, salt: 'argon2id_embedded' };
-  } catch (err) {
-    console.warn('Argon2 failed, falling back to scrypt:', err);
-    // Secure fallback using Node's crypto.scrypt
-    const salt = crypto.randomBytes(16).toString('hex');
-    const derivedKey = crypto.scryptSync(password, salt, 64, {
-      N: 16384,
-      r: 8,
-      p: 1,
-      maxmem: 64 * 1024 * 1024,
-    });
-    return { hash: `scrypt$${derivedKey.toString('hex')}`, salt };
-  }
+  const hash = await argon2.hash(password, {
+    type: argon2.argon2id,
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 4,
+  });
+  return { hash, salt: 'argon2id' };
 }
 
 /**
- * Password verification supporting Argon2id with backward compatibility for legacy PBKDF2
+ * Password verification supporting Argon2id with strict matching
  */
 export async function verifyPassword(
   password: string,
   storedHash: string,
-  salt?: string
+  _salt?: string
 ): Promise<{ isValid: boolean; needsRehash: boolean }> {
   try {
-    if (storedHash.startsWith('$argon2')) {
+    if (storedHash && storedHash.startsWith('$argon2')) {
       const isValid = await argon2.verify(storedHash, password);
       return { isValid, needsRehash: false };
-    }
-
-    if (storedHash.startsWith('scrypt$')) {
-      const actualHash = storedHash.replace('scrypt$', '');
-      const derivedKey = crypto.scryptSync(password, salt || '', 64, {
-        N: 16384,
-        r: 8,
-        p: 1,
-        maxmem: 64 * 1024 * 1024,
-      });
-      const isValid = crypto.timingSafeEqual(Buffer.from(actualHash, 'hex'), derivedKey);
-      return { isValid, needsRehash: true }; // Upgrade to Argon2id upon login
-    }
-
-    // Legacy PBKDF2 check for backward compatibility
-    if (salt) {
-      const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-      const isValid = crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(storedHash, 'hex'));
-      return { isValid, needsRehash: true }; // Upgrade to Argon2id upon login
     }
 
     return { isValid: false, needsRehash: false };
@@ -86,6 +54,9 @@ export async function verifyPassword(
   }
 }
 
+/**
+ * Cryptographic session token signing utility
+ */
 export function createToken(userId: string, email: string): string {
   const payload: TokenPayload = {
     userId,
@@ -133,23 +104,24 @@ export function verifyToken(token: string): TokenPayload | null {
 
 /**
  * Authentication Middleware
- * Validates session either from Authorization: Bearer header OR secure HttpOnly cookie
+ * Validates database session from HttpOnly cookie or x-session-id header
  */
 export async function requireAuth(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  let token: string | undefined;
+  let sessionId: string | undefined;
 
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (req.cookies && req.cookies['session_token']) {
-    token = req.cookies['session_token'];
+  if (req.cookies && req.cookies['session_id']) {
+    sessionId = req.cookies['session_id'];
+  } else if (req.headers['x-session-id']) {
+    sessionId = req.headers['x-session-id'] as string;
+  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    sessionId = req.headers.authorization.substring(7).trim();
   }
 
-  if (!token) {
+  if (!sessionId) {
     res.status(401).json({
       error: 'Authentication required. Please sign in.',
       code: 'UNAUTHORIZED',
@@ -157,25 +129,17 @@ export async function requireAuth(
     return;
   }
 
-  const payload = verifyToken(token);
-  if (!payload) {
+  const sessionData = await db.findSessionById(sessionId);
+  if (!sessionData) {
     res.status(401).json({
       error: 'Invalid or expired session. Please sign in again.',
-      code: 'INVALID_TOKEN',
+      code: 'INVALID_SESSION',
     });
     return;
   }
 
-  const user = await db.findUserById(payload.userId);
-  if (!user) {
-    res.status(401).json({
-      error: 'User account not found or has been revoked.',
-      code: 'USER_NOT_FOUND',
-    });
-    return;
-  }
-
-  req.user = user;
+  req.user = sessionData.user;
+  req.sessionId = sessionData.session.id;
   next();
 }
 
