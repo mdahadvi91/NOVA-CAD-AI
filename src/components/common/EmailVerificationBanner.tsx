@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Mail, CheckCircle2, AlertCircle, RefreshCw, X } from 'lucide-react';
 
 export const EmailVerificationBanner: React.FC = () => {
-  const { user, verifyEmail, resendVerification, quickVerify, devVerificationToken, isLoading } = useAuth();
+  const { user, verifyEmail, resendVerification, isLoading } = useAuth();
   const [isDismissed, setIsDismissed] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
@@ -36,18 +36,6 @@ export const EmailVerificationBanner: React.FC = () => {
       setTimeout(() => setIsModalOpen(false), 1500);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Verification failed.');
-    }
-  };
-
-  const handleQuickVerify = async () => {
-    setError(null);
-    setFeedback(null);
-    try {
-      await quickVerify();
-      setFeedback('Email verified successfully!');
-      setTimeout(() => setIsModalOpen(false), 1500);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Quick verification failed.');
     }
   };
 
@@ -109,32 +97,6 @@ export const EmailVerificationBanner: React.FC = () => {
             <p className="text-xs text-slate-400 mb-4">
               We sent a verification link and security token to <span className="text-slate-200 font-semibold">{user.email}</span>.
             </p>
-
-            {devVerificationToken && (
-              <div className="mb-4 p-3 rounded-lg bg-cyan-950/40 border border-cyan-500/30 text-xs text-cyan-300">
-                <div className="font-semibold mb-1">Preview Environment Token:</div>
-                <div className="font-mono text-[11px] bg-slate-950 p-2 rounded border border-cyan-900/50 break-all select-all">
-                  {devVerificationToken}
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTokenInput(devVerificationToken)}
-                    className="text-[11px] font-semibold text-cyan-400 hover:underline cursor-pointer"
-                  >
-                    Paste into input
-                  </button>
-                  <span className="text-slate-500">•</span>
-                  <button
-                    type="button"
-                    onClick={handleQuickVerify}
-                    className="text-[11px] font-semibold text-emerald-400 hover:underline cursor-pointer"
-                  >
-                    One-Click Quick Verify
-                  </button>
-                </div>
-              </div>
-            )}
 
             {feedback && (
               <div className="mb-4 p-2.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center gap-2 text-xs text-emerald-300">

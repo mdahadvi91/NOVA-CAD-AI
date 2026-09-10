@@ -17,7 +17,32 @@ export function getPostgresPool(): any {
       !config.databaseUrl.includes('127.0.0.1') &&
       !config.databaseUrl.includes('localhost');
 
-    if (hasExternalDb || (isProduction && config.databaseUrl)) {
+    if (isProduction) {
+      if (
+        !config.databaseUrl ||
+        config.databaseUrl.trim().length === 0 ||
+        config.databaseUrl.includes('127.0.0.1') ||
+        config.databaseUrl.includes('localhost')
+      ) {
+        throw new Error(
+          '[SECURITY FATAL] Production server startup aborted: DATABASE_URL is mandatory in production and cannot point to localhost or 127.0.0.1. Localhost/memory fallback is strictly forbidden.'
+        );
+      }
+
+      pool = new pg.Pool({
+        connectionString: config.databaseUrl,
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+      });
+
+      pool.on('error', (err: any) => {
+        console.error('Unexpected error on idle PostgreSQL client', err);
+      });
+      return pool;
+    }
+
+    if (hasExternalDb) {
       pool = new pg.Pool({
         connectionString: config.databaseUrl,
         max: 20,
@@ -46,4 +71,8 @@ export function getPostgresPool(): any {
     }
   }
   return pool;
+}
+
+export function resetPostgresPool(): void {
+  pool = null;
 }

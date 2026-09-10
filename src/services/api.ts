@@ -1,40 +1,11 @@
 import { AuthResponse, Project, ProjectVersion, UnitType, DrawingData, ProjectMetadata, SubscriptionStatusResponse } from '../types';
 
-const TOKEN_KEY = 'nova_cad_token';
-
 class ApiService {
-  private token: string | null = null;
-
-  constructor() {
-    if (typeof window !== 'undefined') {
-      this.token = localStorage.getItem(TOKEN_KEY);
-    }
-  }
-
-  public getToken(): string | null {
-    return this.token;
-  }
-
-  public setToken(token: string | null): void {
-    this.token = token;
-    if (typeof window !== 'undefined') {
-      if (token) {
-        localStorage.setItem(TOKEN_KEY, token);
-      } else {
-        localStorage.removeItem(TOKEN_KEY);
-      }
-    }
-  }
-
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
     };
-
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
 
     try {
       const response = await fetch(endpoint, {
@@ -46,10 +17,6 @@ class ApiService {
       const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        if (response.status === 401) {
-          // Token invalid or expired
-          this.setToken(null);
-        }
         const errorMsg = data?.error || `Request failed with status ${response.status}`;
         throw new Error(errorMsg);
       }
@@ -70,21 +37,17 @@ class ApiService {
     password: string,
     confirmPassword?: string
   ): Promise<AuthResponse> {
-    const res = await this.request<AuthResponse>('/api/auth/register', {
+    return this.request<AuthResponse>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, name, password, confirmPassword: confirmPassword || password }),
     });
-    this.setToken(res.token);
-    return res;
   }
 
   public async login(email: string, password: string): Promise<AuthResponse> {
-    const res = await this.request<AuthResponse>('/api/auth/login', {
+    return this.request<AuthResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    this.setToken(res.token);
-    return res;
   }
 
   public async logout(): Promise<void> {
@@ -93,7 +56,6 @@ class ApiService {
     } catch {
       // Ignore network errors on logout
     }
-    this.setToken(null);
   }
 
   public async getMe(): Promise<{ user: AuthResponse['user'] }> {
@@ -107,8 +69,8 @@ class ApiService {
     });
   }
 
-  public async resendVerification(email?: string): Promise<{ message: string; devVerificationToken?: string }> {
-    return this.request<{ message: string; devVerificationToken?: string }>('/api/auth/resend-verification', {
+  public async resendVerification(email?: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/api/auth/resend-verification', {
       method: 'POST',
       body: JSON.stringify({ email }),
     });
@@ -120,8 +82,8 @@ class ApiService {
     });
   }
 
-  public async forgotPassword(email: string): Promise<{ message: string; devResetToken?: string }> {
-    return this.request<{ message: string; devResetToken?: string }>('/api/auth/forgot-password', {
+  public async forgotPassword(email: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/api/auth/forgot-password', {
       method: 'POST',
       body: JSON.stringify({ email }),
     });

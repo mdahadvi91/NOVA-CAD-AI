@@ -24,7 +24,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   onNavigateLogin,
   onNavigateHome,
 }) => {
-  const { register, error, clearError, isLoading, quickVerify } = useAuth();
+  const { register, error, clearError, isLoading } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,7 +33,6 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string }>({});
-  const [postRegisterToken, setPostRegisterToken] = useState<string | null>(null);
 
   // Live password validation
   const passwordValidation = validatePassword(password, { email, name });
@@ -73,10 +72,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     }
 
     try {
-      const devToken = await register(email.trim(), name.trim(), password, confirmPassword);
-      if (devToken) {
-        setPostRegisterToken(devToken);
-      }
+      await register(email.trim(), name.trim(), password, confirmPassword);
     } catch {
       // Error is caught and surfaced in AuthContext
     }
@@ -114,44 +110,17 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
             </p>
           </div>
 
-          {/* Success / Verification Modal State if Registered */}
-          {postRegisterToken ? (
-            <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-center space-y-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/30">
-                <CheckCircle2 size={22} />
-              </div>
-              <h2 className="text-sm font-bold text-white">Account Successfully Provisioned!</h2>
-              <p className="text-xs text-slate-300">
-                A verification token has been generated for <span className="font-semibold text-white">{email}</span>.
-              </p>
-              <div className="p-2.5 rounded bg-slate-950 border border-emerald-900/50 text-[11px] font-mono text-emerald-300 break-all select-all">
-                {postRegisterToken}
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  await quickVerify();
-                  setPostRegisterToken(null);
-                }}
-                className="w-full py-2.5 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <span>Verify Email & Enter CAD Workspace</span>
-                <ArrowRight size={14} />
-              </button>
+          {error && (
+            <div
+              id="register-error-banner"
+              className="mb-5 p-3 rounded-lg bg-rose-950/50 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-300"
+            >
+              <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
+              <span>{error}</span>
             </div>
-          ) : (
-            <>
-              {error && (
-                <div
-                  id="register-error-banner"
-                  className="mb-5 p-3 rounded-lg bg-rose-950/50 border border-rose-500/30 flex items-start gap-2.5 text-xs text-rose-300"
-                >
-                  <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
+          )}
 
-              <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Name */}
                 <div>
                   <label
@@ -346,8 +315,6 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                   )}
                 </button>
               </form>
-            </>
-          )}
 
           <div className="mt-6 text-center text-xs text-slate-400">
             Already have an account?{' '}

@@ -26,7 +26,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [devTokenNotice, setDevTokenNotice] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -43,11 +42,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
     }
 
     try {
-      const res = await forgotPassword(email.trim());
-      if (res?.devResetToken) {
-        setDevTokenNotice(res.devResetToken);
-        setToken(res.devResetToken);
-      }
+      await forgotPassword(email.trim());
       setStep('reset');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to request password reset.';
@@ -159,15 +154,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
             <p className="text-xs text-slate-400 mb-3">
               Configure a hardened OWASP-compliant password for <span className="text-slate-200 font-semibold">{email}</span>.
             </p>
-
-            {devTokenNotice && (
-              <div className="mb-3 p-2.5 rounded-lg bg-cyan-950/40 border border-cyan-500/30 text-[11px] text-cyan-300">
-                <span className="font-semibold">Development Preview Token:</span>
-                <div className="font-mono mt-1 text-[10px] break-all bg-slate-950 p-1.5 rounded border border-cyan-900/50 select-all">
-                  {devTokenNotice}
-                </div>
-              </div>
-            )}
 
             {error && (
               <div className="mb-3 p-2.5 rounded-lg bg-rose-950/60 border border-rose-500/30 flex items-start gap-2 text-xs text-rose-300">

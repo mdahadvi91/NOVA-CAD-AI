@@ -116,8 +116,6 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
     }
 
     res.status(201).json({
-      sessionId: session.id,
-      token: session.id,
       user: {
         id: user.id,
         email: user.email,
@@ -202,8 +200,6 @@ router.post('/login', async (req, res: Response) => {
     res.cookie('session_token', session.id, COOKIE_OPTIONS); // Backward compatibility alias
 
     res.json({
-      sessionId: session.id,
-      token: session.id,
       user: {
         id: user.id,
         email: user.email,

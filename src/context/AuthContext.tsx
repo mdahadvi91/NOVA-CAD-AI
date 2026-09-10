@@ -4,21 +4,18 @@ import { api } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
-  devVerificationToken: string | null;
   login: (email: string, pass: string) => Promise<void>;
-  register: (email: string, name: string, pass: string, confirmPass?: string) => Promise<string | undefined>;
+  register: (email: string, name: string, pass: string, confirmPass?: string) => Promise<void>;
   verifyEmail: (token: string) => Promise<string>;
-  resendVerification: (email?: string) => Promise<{ message: string; devVerificationToken?: string }>;
+  resendVerification: (email?: string) => Promise<{ message: string }>;
   quickVerify: () => Promise<void>;
-  forgotPassword: (email: string) => Promise<{ message: string; devResetToken?: string }>;
+  forgotPassword: (email: string) => Promise<{ message: string }>;
   resetPassword: (token: string, newPass: string) => Promise<string>;
   logout: () => void;
   clearError: () => void;
-  clearDevVerificationToken: () => void;
   refreshUser: () => Promise<void>;
 }
 
@@ -26,24 +23,19 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(api.getToken());
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [devVerificationToken, setDevVerificationToken] = useState<string | null>(null);
 
   const clearError = useCallback(() => setError(null), []);
-  const clearDevVerificationToken = useCallback(() => setDevVerificationToken(null), []);
 
   const refreshUser = useCallback(async () => {
     try {
       setIsLoading(true);
-      // Validates session via HttpOnly cookie or Authorization header
+      // Validates session via HttpOnly cookie
       const res = await api.getMe();
       setUser(res.user);
-      setToken(api.getToken());
     } catch {
       setUser(null);
-      setToken(null);
     } finally {
       setIsLoading(false);
     }
@@ -59,7 +51,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await api.login(email, pass);
       setUser(res.user);
-      setToken(res.token);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Login failed';
       setError(msg);
@@ -74,17 +65,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     name: string,
     pass: string,
     confirmPass?: string
-  ): Promise<string | undefined> => {
+  ): Promise<void> => {
     setIsLoading(true);
     setError(null);
     try {
       const res = await api.register(email, name, pass, confirmPass);
       setUser(res.user);
-      setToken(res.token);
-      if (res.devVerificationToken) {
-        setDevVerificationToken(res.devVerificationToken);
-      }
-      return res.devVerificationToken;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Registration failed';
       setError(msg);
@@ -102,7 +88,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.user) {
         setUser((prev) => (prev ? { ...prev, emailVerified: true } : res.user || null));
       }
-      setDevVerificationToken(null);
       return res.message;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Email verification failed';
@@ -118,9 +103,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     try {
       const res = await api.resendVerification(email || user?.email);
-      if (res.devVerificationToken) {
-        setDevVerificationToken(res.devVerificationToken);
-      }
       return res;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to resend verification email';
@@ -137,7 +119,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await api.quickVerify();
       setUser(res.user);
-      setDevVerificationToken(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Quick verification failed';
       setError(msg);
@@ -179,20 +160,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     api.logout();
     setUser(null);
-    setToken(null);
     setError(null);
-    setDevVerificationToken(null);
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        token,
         isAuthenticated: !!user,
         isLoading,
         error,
-        devVerificationToken,
         login,
         register,
         verifyEmail,
@@ -202,7 +179,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resetPassword,
         logout,
         clearError,
-        clearDevVerificationToken,
         refreshUser,
       }}
     >
