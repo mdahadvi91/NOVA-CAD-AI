@@ -108,7 +108,6 @@ router.post('/register', registerRateLimiter, async (req, res: Response) => {
     // 9. Create PostgreSQL Session & Set HttpOnly Cookie
     const session = await db.createSession(user.id);
     res.cookie('session_id', session.id, COOKIE_OPTIONS);
-    res.cookie('session_token', session.id, COOKIE_OPTIONS); // Backward compatibility alias
 
     const config = validateAndGetConfig();
     if (!config.isProduction) {
@@ -151,7 +150,7 @@ router.post('/login', async (req, res: Response) => {
     if (lockoutStatus.isLocked) {
       res.setHeader('Retry-After', lockoutStatus.retryAfterSeconds);
       res.status(429).json({
-        error: `Account temporarily locked due to 5 consecutive failed login attempts. Please wait ${lockoutStatus.retryAfterSeconds} seconds before trying again or use Forgot Password.`,
+        error: `Account temporarily locked due to too many failed login attempts. Please wait ${lockoutStatus.retryAfterSeconds} seconds before trying again or reset your password.`,
         code: 'ACCOUNT_LOCKED',
         retryAfter: lockoutStatus.retryAfterSeconds,
       });
@@ -162,12 +161,18 @@ router.post('/login', async (req, res: Response) => {
     const user = await db.findUserByEmail(normalizedEmail);
     if (!user) {
       const result = recordFailedLogin(req, normalizedEmail);
+      if (result.isLocked) {
+        res.setHeader('Retry-After', result.retryAfterSeconds);
+        res.status(429).json({
+          error: 'Too many failed login attempts. Account temporarily locked.',
+          code: 'ACCOUNT_LOCKED',
+          retryAfter: result.retryAfterSeconds,
+        });
+        return;
+      }
       res.status(401).json({
-        error: result.isLocked
-          ? 'Too many failed login attempts. Account temporarily locked for 15 minutes.'
-          : `Invalid email or password. ${result.attemptsRemaining} attempt(s) remaining before temporary lockout.`,
-        attemptsRemaining: result.attemptsRemaining,
-        code: result.isLocked ? 'ACCOUNT_LOCKED' : 'INVALID_CREDENTIALS',
+        error: 'Invalid email or password.',
+        code: 'INVALID_CREDENTIALS',
       });
       return;
     }
@@ -176,12 +181,18 @@ router.post('/login', async (req, res: Response) => {
     const { isValid } = await verifyPassword(password, user.passwordHash, user.salt);
     if (!isValid) {
       const result = recordFailedLogin(req, normalizedEmail);
+      if (result.isLocked) {
+        res.setHeader('Retry-After', result.retryAfterSeconds);
+        res.status(429).json({
+          error: 'Too many failed login attempts. Account temporarily locked.',
+          code: 'ACCOUNT_LOCKED',
+          retryAfter: result.retryAfterSeconds,
+        });
+        return;
+      }
       res.status(401).json({
-        error: result.isLocked
-          ? 'Too many failed login attempts. Account temporarily locked for 15 minutes.'
-          : `Invalid email or password. ${result.attemptsRemaining} attempt(s) remaining before temporary lockout.`,
-        attemptsRemaining: result.attemptsRemaining,
-        code: result.isLocked ? 'ACCOUNT_LOCKED' : 'INVALID_CREDENTIALS',
+        error: 'Invalid email or password.',
+        code: 'INVALID_CREDENTIALS',
       });
       return;
     }
@@ -194,10 +205,9 @@ router.post('/login', async (req, res: Response) => {
       lastLoginAt: new Date().toISOString(),
     });
 
-    // 6. Create PostgreSQL Session & Set HttpOnly Cookie
+    // 6. Create PostgreSQL Session & Set HttpOnly Cookie (Strictly session_id only)
     const session = await db.createSession(user.id);
     res.cookie('session_id', session.id, COOKIE_OPTIONS);
-    res.cookie('session_token', session.id, COOKIE_OPTIONS); // Backward compatibility alias
 
     res.json({
       user: {
@@ -281,12 +291,7 @@ router.post('/resend-verification', emailVerificationRateLimiter, async (req, re
     if (email && typeof email === 'string') {
       targetUser = await db.findUserByEmail(email.trim().toLowerCase());
     } else {
-      const sessionId =
-        req.cookies?.['session_id'] ||
-        (req.headers['x-session-id'] as string) ||
-        (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
-          ? req.headers.authorization.substring(7).trim()
-          : undefined);
+      const sessionId = req.cookies?.['session_id'];
 
       if (sessionId) {
         const sessionData = await db.findSessionById(sessionId);
@@ -328,28 +333,39 @@ router.post('/resend-verification', emailVerificationRateLimiter, async (req, re
   }
 });
 
-// --- DEV QUICK VERIFY HELPER (Allows instant verification in dev mode) ---
-router.post('/quick-verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  const user = req.user!;
-  const updatedUser = await db.updateUser(user.id, {
-    emailVerified: true,
-  });
+// --- DEV QUICK VERIFY HELPER (Strictly forbidden / 404 in production) ---
+router.post(
+  '/quick-verify',
+  (req, res, next) => {
+    if (process.env.NODE_ENV === 'production') {
+      res.status(404).json({ error: 'Endpoint not found in production environment.' });
+      return;
+    }
+    next();
+  },
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    const user = req.user!;
+    const updatedUser = await db.updateUser(user.id, {
+      emailVerified: true,
+    });
 
-  res.json({
-    message: 'Email successfully verified.',
-    user: updatedUser
-      ? {
-          id: updatedUser.id,
-          email: updatedUser.email,
-          name: updatedUser.name,
-          role: updatedUser.role,
-          tier: updatedUser.tier,
-          subscriptionStatus: updatedUser.subscriptionStatus,
-          emailVerified: updatedUser.emailVerified,
-        }
-      : null,
-  });
-});
+    res.json({
+      message: 'Email successfully verified.',
+      user: updatedUser
+        ? {
+            id: updatedUser.id,
+            email: updatedUser.email,
+            name: updatedUser.name,
+            role: updatedUser.role,
+            tier: updatedUser.tier,
+            subscriptionStatus: updatedUser.subscriptionStatus,
+            emailVerified: updatedUser.emailVerified,
+          }
+        : null,
+    });
+  }
+);
 
 // --- FORGOT PASSWORD: REQUEST RESET TOKEN ---
 router.post('/forgot-password', passwordResetRateLimiter, async (req, res: Response) => {
@@ -419,7 +435,6 @@ router.post('/reset-password', passwordResetRateLimiter, async (req, res: Respon
 
     // Clear session cookie if any
     res.clearCookie('session_id', { path: '/' });
-    res.clearCookie('session_token', { path: '/' });
 
     res.json({
       message: 'Password successfully updated. All active sessions have been invalidated. Please sign in with your new password.',
@@ -450,18 +465,13 @@ router.get('/subscription-status', requireAuth, async (req: AuthenticatedRequest
 
 // --- LOGOUT: COOKIE CLEAR + DATABASE SESSION INVALIDATE ---
 router.post('/logout', async (req: AuthenticatedRequest, res: Response) => {
-  const sessionId =
-    req.sessionId ||
-    req.cookies?.['session_id'] ||
-    req.cookies?.['session_token'] ||
-    (req.headers['x-session-id'] as string);
+  const sessionId = req.sessionId || req.cookies?.['session_id'];
 
   if (sessionId) {
     await db.deleteSession(sessionId).catch(() => {});
   }
 
   res.clearCookie('session_id', { path: '/' });
-  res.clearCookie('session_token', { path: '/' });
   res.json({ message: 'Signed out securely.' });
 });
 

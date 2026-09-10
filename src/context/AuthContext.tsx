@@ -11,10 +11,9 @@ interface AuthContextType {
   register: (email: string, name: string, pass: string, confirmPass?: string) => Promise<void>;
   verifyEmail: (token: string) => Promise<string>;
   resendVerification: (email?: string) => Promise<{ message: string }>;
-  quickVerify: () => Promise<void>;
   forgotPassword: (email: string) => Promise<{ message: string }>;
   resetPassword: (token: string, newPass: string) => Promise<string>;
-  logout: () => void;
+  logout: () => Promise<void>;
   clearError: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -113,21 +112,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const quickVerify = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await api.quickVerify();
-      setUser(res.user);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Quick verification failed';
-      setError(msg);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const forgotPassword = async (email: string) => {
     setIsLoading(true);
     setError(null);
@@ -157,10 +141,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const logout = () => {
-    api.logout();
-    setUser(null);
-    setError(null);
+  const logout = async (): Promise<void> => {
+    setIsLoading(true);
+    try {
+      await api.logout();
+    } catch (err: unknown) {
+      console.error('Logout failed:', err);
+    } finally {
+      setUser(null);
+      setError(null);
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -174,7 +165,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         verifyEmail,
         resendVerification,
-        quickVerify,
         forgotPassword,
         resetPassword,
         logout,

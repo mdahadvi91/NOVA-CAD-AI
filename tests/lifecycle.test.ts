@@ -126,13 +126,15 @@ export async function runLifecycleTests(): Promise<boolean> {
     assert(Boolean(setCookieHeader), 'set-cookie header present in response');
     const sessionCookieStr = setCookieHeader || '';
     assert(sessionCookieStr.includes('session_id='), 'Cookie name is session_id');
+    assert(!sessionCookieStr.includes('session_token='), 'session_token alias is NOT set');
     assert(sessionCookieStr.toLowerCase().includes('httponly'), 'Cookie has HttpOnly flag set');
     assert(sessionCookieStr.toLowerCase().includes('samesite=lax'), 'Cookie has SameSite=Lax set');
 
-    // Extract raw cookie for subsequent requests
+    // Extract raw cookie and session ID for subsequent tests
     const userACookie = sessionCookieStr.split(';')[0];
+    const rawSessionId = userACookie.split('=')[1];
 
-    // 2. Authenticated /me endpoint
+    // 2. Authenticated /me endpoint with Cookie
     const meRes = await fetch(`${baseUrl}/api/auth/me`, {
       headers: { Cookie: userACookie },
     });
@@ -145,6 +147,18 @@ export async function runLifecycleTests(): Promise<boolean> {
     // 3. Unauthenticated /me endpoint
     const unauthRes = await fetch(`${baseUrl}/api/auth/me`);
     assert(unauthRes.status === 401, 'GET /api/auth/me without cookie is rejected with 401');
+
+    // 4. Strict Cookie-Only Enforcement: Reject x-session-id header
+    const xSessionRes = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { 'x-session-id': rawSessionId },
+    });
+    assert(xSessionRes.status === 401, 'GET /api/auth/me with x-session-id header is strictly rejected with 401');
+
+    // 5. Strict Cookie-Only Enforcement: Reject Authorization Bearer header
+    const bearerRes = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${rawSessionId}` },
+    });
+    assert(bearerRes.status === 401, 'GET /api/auth/me with Authorization Bearer header is strictly rejected with 401');
 
     // ==========================================
     // GATE 3: Project CRUD & User Isolation
@@ -283,13 +297,16 @@ export async function runLifecycleTests(): Promise<boolean> {
 
     assert(invalidatedRes.status === 401, 'Old session cookie is strictly invalidated after password reset');
 
-    // Login with old password must fail
+    // Login with old password must fail with generic error (no account enumeration or attempts remaining)
     const oldLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: userAEmail, password: userAPassword }),
     });
+    const oldLoginData = await oldLoginRes.json();
     assert(oldLoginRes.status === 401, 'Login with old password fails');
+    assert(oldLoginData.error === 'Invalid email or password.', 'Login failure returns generic error message');
+    assert(!('attemptsRemaining' in oldLoginData), 'Login failure DOES NOT leak attemptsRemaining');
 
     // Login with new password must succeed and set new session cookie
     const newLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
@@ -303,12 +320,33 @@ export async function runLifecycleTests(): Promise<boolean> {
     assert(!newLoginData.token, 'New login body does not contain token');
     assert(!newLoginData.sessionId, 'New login body does not contain sessionId');
 
-    const newSessionCookie = (newLoginRes.headers.get('set-cookie') || '').split(';')[0];
+    const newLoginSetCookie = newLoginRes.headers.get('set-cookie') || '';
+    assert(newLoginSetCookie.includes('session_id='), 'Login cookie name is session_id');
+    assert(!newLoginSetCookie.includes('session_token='), 'Login DOES NOT set session_token alias');
+
+    const newSessionCookie = newLoginSetCookie.split(';')[0];
 
     // ==========================================
-    // GATE 5: Logout & Session Deletion
+    // GATE 5: quick-verify Production Boundary
     // ==========================================
-    console.log('\n--- GATE 5: Logout & Session Destruction ---');
+    console.log('\n--- GATE 5: quick-verify Production Boundary ---');
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      const prodQuickVerifyRes = await fetch(`${baseUrl}/api/auth/quick-verify`, {
+        method: 'POST',
+        headers: { Cookie: newSessionCookie },
+      });
+      assert(prodQuickVerifyRes.status === 404, 'POST /api/auth/quick-verify returns 404 in production environment');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+
+    // ==========================================
+    // GATE 6: Logout & Session Deletion
+    // ==========================================
+    console.log('\n--- GATE 6: Logout & Session Destruction ---');
 
     const logoutRes = await fetch(`${baseUrl}/api/auth/logout`, {
       method: 'POST',

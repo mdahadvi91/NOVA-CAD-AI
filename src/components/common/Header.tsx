@@ -155,9 +155,9 @@ export const Header: React.FC<HeaderProps> = ({
 
                   <button
                     id="dropdown-logout-button"
-                    onClick={() => {
+                    onClick={async () => {
                       setIsDropdownOpen(false);
-                      logout();
+                      await logout();
                     }}
                     className="w-full text-left px-4 py-2 text-xs text-rose-300 hover:bg-rose-950/40 hover:text-rose-200 flex items-center gap-2 border-t border-slate-800"
                   >

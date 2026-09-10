@@ -12,7 +12,7 @@
  */
 
 import { validatePassword } from '../src/utils/passwordPolicy.js';
-import { hashPassword, verifyPassword, createToken, verifyToken } from '../server/auth.js';
+import { hashPassword, verifyPassword } from '../server/auth.js';
 import { validateAndGetConfig } from '../server/config.js';
 import { db, DrawingData } from '../server/db.js';
 import { validateDrawingData } from '../server/validation/drawingValidation.js';

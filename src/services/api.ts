@@ -76,12 +76,6 @@ class ApiService {
     });
   }
 
-  public async quickVerify(): Promise<{ message: string; user: AuthResponse['user'] }> {
-    return this.request<{ message: string; user: AuthResponse['user'] }>('/api/auth/quick-verify', {
-      method: 'POST',
-    });
-  }
-
   public async forgotPassword(email: string): Promise<{ message: string }> {
     return this.request<{ message: string }>('/api/auth/forgot-password', {
       method: 'POST',

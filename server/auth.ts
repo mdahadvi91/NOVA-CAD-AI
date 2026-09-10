@@ -1,18 +1,6 @@
-import crypto from 'crypto';
 import argon2 from 'argon2';
 import { Request, Response, NextFunction } from 'express';
 import { db, User } from './db.js';
-import { validateAndGetConfig } from './config.js';
-
-function getAppSecret(): string {
-  return validateAndGetConfig().appSecret;
-}
-
-export interface TokenPayload {
-  userId: string;
-  email: string;
-  exp: number;
-}
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
@@ -55,71 +43,16 @@ export async function verifyPassword(
 }
 
 /**
- * Cryptographic session token signing utility
- */
-export function createToken(userId: string, email: string): string {
-  const payload: TokenPayload = {
-    userId,
-    email,
-    exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7 days expiration
-  };
-
-  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const signature = crypto
-    .createHmac('sha256', getAppSecret())
-    .update(payloadB64)
-    .digest('base64url');
-
-  return `${payloadB64}.${signature}`;
-}
-
-export function verifyToken(token: string): TokenPayload | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 2) return null;
-
-    const [payloadB64, signature] = parts;
-    const expectedSignature = crypto
-      .createHmac('sha256', getAppSecret())
-      .update(payloadB64)
-      .digest('base64url');
-
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
-      return null;
-    }
-
-    const payload: TokenPayload = JSON.parse(
-      Buffer.from(payloadB64, 'base64url').toString('utf-8')
-    );
-
-    if (payload.exp < Math.floor(Date.now() / 1000)) {
-      return null; // Expired
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Authentication Middleware
- * Validates database session from HttpOnly cookie or x-session-id header
+ * Strictly enforces HttpOnly session_id cookie -> PostgreSQL session -> User
+ * Alternate transports (x-session-id headers, Authorization Bearer) are strictly forbidden.
  */
 export async function requireAuth(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  let sessionId: string | undefined;
-
-  if (req.cookies && req.cookies['session_id']) {
-    sessionId = req.cookies['session_id'];
-  } else if (req.headers['x-session-id']) {
-    sessionId = req.headers['x-session-id'] as string;
-  } else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-    sessionId = req.headers.authorization.substring(7).trim();
-  }
+  const sessionId: string | undefined = req.cookies?.['session_id'];
 
   if (!sessionId) {
     res.status(401).json({
