@@ -38,19 +38,19 @@ class MemoryRateLimiter {
     return { allowed: true, remaining: max - record.count, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
   }
 
-  public getStatus(key: string, max: number, windowMs: number): { isBlocked: boolean; attemptsRemaining: number; retryAfter: number } {
+  public getStatus(key: string, max: number, windowMs: number): { isBlocked: boolean; remaining: number; retryAfter: number } {
     const now = Date.now();
     const record = this.store.get(key);
 
     if (!record || now > record.resetTime) {
-      return { isBlocked: false, attemptsRemaining: max, retryAfter: 0 };
+      return { isBlocked: false, remaining: max, retryAfter: 0 };
     }
 
     if (record.count >= max) {
-      return { isBlocked: true, attemptsRemaining: 0, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
+      return { isBlocked: true, remaining: 0, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
     }
 
-    return { isBlocked: false, attemptsRemaining: max - record.count, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
+    return { isBlocked: false, remaining: max - record.count, retryAfter: Math.ceil((record.resetTime - now) / 1000) };
   }
 
   public reset(key: string): void {
@@ -129,22 +129,22 @@ export function getLoginKey(req: Request, email?: string): string {
   return `login:${ip}:${normalizedEmail}`;
 }
 
-export function checkLoginLockout(req: Request, email: string): { isLocked: boolean; attemptsRemaining: number; retryAfterSeconds: number } {
+export function checkLoginLockout(req: Request, email: string): { isLocked: boolean; remaining: number; retryAfterSeconds: number } {
   const key = getLoginKey(req, email);
   const status = rateLimiterStore.getStatus(key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_WINDOW_MS);
   return {
     isLocked: status.isBlocked,
-    attemptsRemaining: status.attemptsRemaining,
+    remaining: status.remaining,
     retryAfterSeconds: status.retryAfter,
   };
 }
 
-export function recordFailedLogin(req: Request, email: string): { isLocked: boolean; attemptsRemaining: number; retryAfterSeconds: number } {
+export function recordFailedLogin(req: Request, email: string): { isLocked: boolean; remaining: number; retryAfterSeconds: number } {
   const key = getLoginKey(req, email);
   const result = rateLimiterStore.check(key, MAX_LOGIN_ATTEMPTS, LOGIN_LOCKOUT_WINDOW_MS);
   return {
     isLocked: !result.allowed,
-    attemptsRemaining: Math.max(0, result.remaining),
+    remaining: Math.max(0, result.remaining),
     retryAfterSeconds: result.retryAfter,
   };
 }

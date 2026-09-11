@@ -131,7 +131,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </div>
             <h3 className="text-base font-bold text-white mb-1.5">Secure Ownership & Isolation</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Server-enforced authorization with PBKDF2 hashing, HMAC token authentication, and strict tenant isolation—User A never accesses User B’s drawings.
+              Server-enforced authorization with Argon2id hashing, secure PostgreSQL session authentication, and strict tenant isolation—User A never accesses User B’s drawings.
             </p>
           </div>
 

@@ -125,7 +125,7 @@ async function run24AcceptanceTests() {
   assert(foundSession?.user.id === userA.id, 10, 'Session links cleanly to authenticated User object');
 
   // --- TEST 11: Unauthenticated Protection Check ---
-  const nonExistentSession = await db.findSessionById('ses_invalid_fake_session_token_123');
+  const nonExistentSession = await db.findSessionById('ses_invalid_fake_session_id_123');
   assert(nonExistentSession === null, 11, 'Unauthenticated or invalid session query returns null');
 
   // --- TEST 12: User Projects Listing ---
